@@ -1,65 +1,92 @@
-import multiprocessing as mp, time, REVComPorts, REVMessage as REVMsg
-from REVModule import Module
-import binascii, serial, time
+import tkinter as tk
+from tkinter import *
+import tkinter.ttk
+import multiprocessing as mp, time
+from . import REVComPorts, REVmessages as REVMsg
+from .REVModule import Module
+import binascii, serial, time, queue
 
-#Serial Communications 
 class REVcomm:
-    """The serial communications for REV hubs"""
-    def __init__(self, errors = False):
+
+    def __init__(self):
         self.serialReceive_Thread = False
         self.FunctionReturnTime = 0
         self.msgNum = 1
+        self.totalTime = 0
         self.rxQueue = mp.Queue(256)
         self.txQueue = mp.Queue(256)
         self.roundTripAverage = 0
         self.numMsgs = 0
+        self.enablePrinting = False
         self.msgSendTime = 0
         self.msgRcvTime = 0
         self.discoveryTimeout = 0.5
         self.averageMsgTime = 0
         self.REVProcessor = serial.Serial(baudrate=460800, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE)
-        self.errorHandler = errors
 
     def listPorts(self):
-        """list available ports"""
         REVComPorts.populateSerialPorts()
         return REVComPorts.REVPorts
 
+    def setActivePortBySN(self, sn):
+        REVComPorts.populateSerialPorts()
+        for port in REVComPorts.serialPorts:
+            if port.getSN() == sn:
+                setActivePort(port)
+
     def openActivePort(self):
-        """Open a serial port"""
-        try:
-            numSerialErrors = 2
-            while not self.REVProcessor.isOpen():
-                self.REVProcessor.port = self.listPorts()[0].getName()
-                try:
-                    self.REVProcessor.open()
-                except serial.SerialException as e:
-                    error ='Serial port error: ' + str(e) + ' retrying...'
-                    print(error)
-                    numSerialErrors -= 1
-                    if numSerialErrors == 0:
-                        self.throwError(error)
-                        break
-                    time.sleep(1)
-        except IndexError:
-            self.throwError('There are no connected hubs')
+        numSerialErrors = 2
+        while not self.REVProcessor.isOpen():
+            self.REVProcessor.port = self.listPorts()[0].getName()
+            try:
+                self.REVProcessor.open()
+            except serial.SerialException as e:
+                print('Serial port error: ' + str(e) + ' retrying...')
+                numSerialErrors -= 1
+                if numSerialErrors == 0:
+                    break
+                time.sleep(1)
 
     def closeActivePort(self):
-        """Close an active serial port"""
         self.REVProcessor.close()
 
+    def getTime_ms(self):
+        return int(round(time.time() * 1000))
+
     def sendAndReceive(self, PacketToWrite, destination):
-        """Send new packets and parse response"""
+        numSerialErrors = 5
+        self.WaitForFrameByte1 = 1
+        self.WaitForFrameByte2 = 2
+        self.WaitForPacketLengthByte1 = 3
+        self.WaitForPacketLengthByte2 = 4
+        self.WaitForDestByte = 5
+        self.WaitForSourceByte = 6
+        self.WaitForMsgNumByte = 7
+        self.WaitForRefNumByte = 8
+        self.WaitForPacketTypeByte = 9
+        self.WaitForPayloadBytes = 10
+        parseState = 1
+        self.parseState = self.WaitForFrameByte1
         incomingPacket = ''
         packetLength = 0
         msgNum = 0
         retry = True
+        readingBytesStart = 0
+        readingBytesEnd = 0
+        discoveryTimeout = 1000
+        rcvStarted = False
+        startReceiveTime = self.getTime_ms()
+        receivedMessageNums = []
+        inWaitingQueue = queue.Queue()
+        beenInLoop = False
         try:
             retryAttempt = 0
             while retry:
+                sendAndReceiveStart = time.time()
                 PacketToWrite.header.destination = destination
                 if isinstance(PacketToWrite, REVMsg.REVPacket):
-                    MaxRetries = 1
+                    MaxRetries = 3
+                    RetryTimeout_s = 1
                     PacketToWrite.header.msgNum = msgNum
                     msgNum = (msgNum + 1) % 256
                     if msgNum == 0:
@@ -68,10 +95,9 @@ class REVcomm:
                     discoveryMode = False
                     if printData == REVMsg.MsgNum.Discovery:
                         discoveryMode = True
-
-                    #write the packet 
+                    if self.enablePrinting:
+                        print('-->', REVMsg.printDict[printData]['Name'], '::', PacketToWrite.getPacketData())
                     self.REVProcessor.write(binascii.unhexlify(PacketToWrite.getPacketData()))
-                    
                     waitTimeStart = time.time()
                     timeout = False
                     while self.REVProcessor.inWaiting() == 0:
@@ -82,31 +108,53 @@ class REVcomm:
                                 retry = False
                             break
                     if timeout:
-                        raise(TimeoutError)
-
+                        continue
                     if discoveryMode:
-                        packet = [] 
-
-                    # read all incoming bytes
-                    bytes = []
-                    packet = ""
-                    while self.REVProcessor.in_waiting() < 0:
-                        newByte = str(binascii.hexlify(self.REVProcessor.read(1)).upper())[2:-1]
-                        bytes.append(newByte)
-                        packet += newByte
-                        
-                    # process the packet if theres any bytes
-                    if len(bytes) != 0:
-                        if bytes[0] == '44' and bytes[1] == '4B':
-                            lengthbytes = bytes[2] + bytes[3]
-                            packet += lengthbytes
-                            packetLength = int(int(lengthbytes, 16) >> 8 | int(lengthbytes, 16) % 256 << 8)
-                            if packetLength <= REVMsg.PAYLOAD_MAX_SIZE:
-                                if len(packet) / 2 == packetLength:
-                                    receivedChkSum = int(packet[-2:], 16)
-                                    calculatedChkSum = self.checkPacket(packet, receivedChkSum)
-                                    if calculatedChkSum[0]:
-                                        newPacket = self.processPacket(packet)
+                        packet = []
+                    if self.REVProcessor.inWaiting() > 0:
+                        while self.REVProcessor.inWaiting() > 0:
+                            retry = False
+                            newByte = binascii.hexlify(self.REVProcessor.read(1)).upper()
+                            newByte = str(newByte)
+                            newByte = newByte[2:]
+                            newByte = newByte[:-1]
+                            if parseState == self.WaitForFrameByte1:
+                                rcvStarted = True
+                                startReceiveTime = time.time()
+                                if newByte == '44':
+                                    parseState = self.WaitForFrameByte2
+                            elif parseState == self.WaitForFrameByte2:
+                                if newByte == '44':
+                                    None
+                                elif newByte == '4B':
+                                    parseState = self.WaitForPacketLengthByte1
+                                else:
+                                    parseState = self.WaitForFrameByte1
+                            elif parseState == self.WaitForPacketLengthByte1:
+                                incomingPacket = '444B' + newByte
+                                lengthBytes = newByte
+                                parseState = self.WaitForPacketLengthByte2
+                            elif parseState == self.WaitForPacketLengthByte2:
+                                incomingPacket += newByte
+                                lengthBytes += newByte
+                                lengthBytes = int(int(lengthBytes, 16) >> 8 | int(lengthBytes, 16) % 256 << 8)
+                                if lengthBytes <= REVMsg.PAYLOAD_MAX_SIZE:
+                                    packetLength = lengthBytes
+                                    parseState = self.WaitForPayloadBytes
+                                elif newByte == '44':
+                                    parseState = self.WaitForFrameByte2
+                                else:
+                                    parseState = self.WaitForFrameByte1
+                            elif parseState == self.WaitForPayloadBytes:
+                                incomingPacket += newByte
+                                if len(incomingPacket) / 2 == packetLength:
+                                    msgRcvTime = time.time()
+                                    receivedChkSum = int(incomingPacket[-2:], 16)
+                                    chksumdata = self.checkPacket(incomingPacket, receivedChkSum)
+                                    if chksumdata[0]:
+                                        newPacket = self.processPacket(incomingPacket)
+                                        if self.enablePrinting:
+                                            print('<--', REVMsg.printDict[int(newPacket.header.packetType)]['Name'], '::', newPacket.getPacketData())
                                         if discoveryMode:
                                             packet.append(newPacket)
                                             time.sleep(2)
@@ -117,8 +165,10 @@ class REVcomm:
                                         else:
                                             return newPacket
                                     else:
-                                        print('Invalid ChkSum: ',  calculatedChkSum[1], '==', calculatedChkSum[2])
-                            
+                                        print('Invalid ChkSum: ', chksumdata[1], '==', chksumdata[2])
+                                    rcvStarted = False
+                                    parseState = self.WaitForFrameByte1
+
                 else:
                     exit('\n\n\n!!!Attempting to send something other than a REVPacket!!!\n\n\n')
 
@@ -129,7 +179,6 @@ class REVcomm:
         return True
 
     def checkResponse(self, receivedPacket, PacketToWrite):
-        """Check for valid response packet"""
         packetType = int(receivedPacket.header.packetType)
         data = PacketToWrite.header.packetType.data >> 8 | PacketToWrite.header.packetType.data % 256 << 8
         responseExpected = REVMsg.printDict[data]['Response']
@@ -153,7 +202,6 @@ class REVcomm:
                 return False
 
     def checkPacket(self, incomingPacket, receivedChkSum):
-        """Check for valid checksum"""
         calcChkSum = 0
         for bytePointer in range(0, len(incomingPacket) - 2, 2):
             calcChkSum += int(incomingPacket[bytePointer:bytePointer + 2], 16)
@@ -162,7 +210,7 @@ class REVcomm:
         return (receivedChkSum == calcChkSum, receivedChkSum, calcChkSum)
 
     def processPacket(self, incomingPacket):
-        """Parse a incoming packet"""
+        packetFrameBytes = int(incomingPacket[REVMsg.REVPacket.FrameIndex_Start:REVMsg.REVPacket.FrameIndex_End], 16)
         packetLength = int(self.swapEndianess(incomingPacket[REVMsg.REVPacket.LengthIndex_Start:REVMsg.REVPacket.LengthIndex_End]), 16)
         packetDest = int(incomingPacket[REVMsg.REVPacket.DestinationIndex_Start:REVMsg.REVPacket.DestinationIndex_End], 16)
         packetSrc = int(incomingPacket[REVMsg.REVPacket.SourceIndex_Start:REVMsg.REVPacket.SourceIndex_End], 16)
@@ -170,6 +218,7 @@ class REVcomm:
         packetRefNum = int(incomingPacket[REVMsg.REVPacket.RefNumIndex_Start:REVMsg.REVPacket.RefNumIndex_End], 16)
         packetCommandNum = int(self.swapEndianess(incomingPacket[REVMsg.REVPacket.PacketTypeIndex_Start:REVMsg.REVPacket.PacketTypeIndex_End]), 16)
         packetPayload = incomingPacket[REVMsg.REVPacket.HeaderIndex_End:-2]
+        packetChkSum = int(incomingPacket[-2:], 16)
         newPacket = REVMsg.printDict[packetCommandNum]['Packet']()
         newPacket.assignRawBytes(incomingPacket)
         newPacket.header.length = packetLength
@@ -184,41 +233,37 @@ class REVcomm:
             valueToAdd.data = int(self.swapEndianess(packetPayload[bytePointer:bytePointer + len(payloadMember) * 2]), 16)
             newPacket.payload.payloadMember = valueToAdd
             bytePointer = bytePointer + len(payloadMember) * 2
+
         return newPacket
 
     def swapEndianess(self, bytes):
-        """Swap bytes for packets"""
         swappedBytes = ''
         for bytePointer in range(0, len(bytes), 2):
             thisByte = bytes[bytePointer:bytePointer + 2]
             swappedBytes = thisByte + swappedBytes
+
         return swappedBytes
 
     def getModuleStatus(self, destination):
-        """Get the status for a Lynx module"""
         getModuleStatusMsg = REVMsg.GetModuleStatus()
         getModuleStatusMsg.payload.clearStatus = 1
         packet = self.sendAndReceive(getModuleStatusMsg, destination)
         return packet.payload.motorAlerts
 
     def keepAlive(self, destination):
-        """Send keep alive packet"""
         keepAliveMsg = REVMsg.KeepAlive()
         return self.sendAndReceive(keepAliveMsg, destination)
 
     def failSafe(self, destination):
-        """Failsafe"""
         failSafeMsg = REVMsg.FailSafe()
         self.sendAndReceive(failSafeMsg, destination)
 
     def setNewModuleAddress(self, destination, moduleAddress):
-        """Set a new lynx module address """
         setNewModuleAddressMsg = REVMsg.SetNewModuleAddress()
         setNewModuleAddressMsg.payload.moduleAddress = moduleAddress
         self.sendAndReceive(setNewModuleAddressMsg, destination)
 
     def queryInterface(self, destination, interfaceName):
-        """Query interface"""
         queryInterfaceMsg = REVMsg.QueryInterface()
         queryInterfaceMsg.payload.interfaceName = interfaceName
         packet = self.sendAndReceive(queryInterfaceMsg, destination)
@@ -226,7 +271,6 @@ class REVcomm:
          packet.payload.packetID, packet.numValues)
 
     def setModuleLEDColor(self, destination, redPower, greenPower, bluePower):
-        """Set the color of the LED on a lynx modle from RGB"""
         setModuleLEDColorMsg = REVMsg.SetModuleLEDColor()
         setModuleLEDColorMsg.payload.redPower = redPower
         setModuleLEDColorMsg.payload.greenPower = greenPower
@@ -234,77 +278,80 @@ class REVcomm:
         self.sendAndReceive(setModuleLEDColorMsg, destination)
 
     def getModuleLEDColor(self, destination):
-        """Read the set RGB of lynx module LED"""
         getModuleLEDColorMsg = REVMsg.GetModuleLEDColor()
         packet = self.sendAndReceive(getModuleLEDColorMsg, destination)
         return (
          packet.payload.redPower, packet.payload.greenPower, packet.payload.bluePower)
 
     def setModuleLEDPattern(self, destination, stepArray):
-        """Set a patern for lynx LED"""
         setModuleLEDPatternMsg = REVMsg.SetModuleLEDPattern()
         for i, step in enumerate(stepArray.patt):
             setattr(setModuleLEDPatternMsg.payload, ('rgbtStep{}').format(i), step)  
         self.sendAndReceive(setModuleLEDPatternMsg, destination)
 
     def getModuleLEDPattern(self, destination):
-        """Read module LED patern"""
         getModuleLEDPatternMsg = REVMsg.GetModuleLEDPattern()
         packet = self.sendAndReceive(getModuleLEDPatternMsg, destination)
         return packet
 
     def debugLogLevel(self, destination, groupNumber, verbosityLevel):
-        """Debug log level"""
         debugLogLevelMsg = REVMsg.DebugLogLevel()
         debugLogLevelMsg.payload.groupNumber = groupNumber
         debugLogLevelMsg.payload.verbosityLevel = verbosityLevel
         self.sendAndReceive(debugLogLevelMsg, destination)
 
     def discovery(self):
-        """Discover Connected lynx modules"""
         self.discovered = REVMsg.Discovery()
         packets = self.sendAndReceive(self.discovered, 255)
         REVModules = []
         for packet in packets:
-            module = Module(self, packet.header.source, packet.payload.parent, self)
+            module = Module(self, packet.header.source, packet.payload.parent)
             module.init_periphs()
             REVModules.append(module)
         return REVModules
 
     def getBulkInputData(self, destination):
-        """Get bulk data; Analgous to the FTC SDK Bulkread"""
         getBulkInputDataMsg = REVMsg.GetBulkInputData()
         packet = self.sendAndReceive(getBulkInputDataMsg, destination)
         return packet
 
     def phoneChargeControl(self, destination, enable):
-        """seems to be able to charge connected android phone somehow? not sure how this even works"""
         phoneChargeControlMsg = REVMsg.PhoneChargeControl()
         phoneChargeControlMsg.payload.enable = enable
         self.sendAndReceive(phoneChargeControlMsg, destination)
 
     def phoneChargeQuery(self, destination):
-        """See if connected android phone is being charged"""
         phoneChargeQueryMsg = REVMsg.PhoneChargeQuery()
         packet = self.sendAndReceive(phoneChargeQueryMsg, destination)
         return packet.payload.enable
 
     def injectDataLogHint(self, destination, length, hintText):
-        """Inject Data log hint text"""
         injectDataLogHintMsg = REVMsg.InjectDataLogHint()
         injectDataLogHintMsg.payload.length = length
         injectDataLogHintMsg.payload.hintText = hintText
         self.sendAndReceive(injectDataLogHintMsg, destination)
 
     def readVersionString(self, destination):
-        """used to read the firmware version"""
         readVersionStringMsg = REVMsg.ReadVersionString()
         packet = self.sendAndReceive(readVersionStringMsg, destination)
         return packet.payload.versionString
-    
-    def throwError(self, error): 
-        """This is a generic error handler api that allows objects farhter down the stack to send errors to an error handler"""
-        if self.errorHandler != False:
-            self.errorHandler.throwError(error)
-        else:
-            print(error)
+
+    def getBulkMotorData(self, destination):
+        getBulkMotorDataMsg = REVMsg.GetBulkMotorData()
+        packet = self.sendAndReceive(getBulkMotorDataMsg, destination)
+        return packet
+
+    def getBulkADCData(self, destination):
+        getBulkADCDataMsg = REVMsg.GetBulkADCData()
+        packet = self.sendAndReceive(getBulkADCDataMsg, destination)
+        return packet
+
+    def getBulkI2CData(self, destination):
+        getBulkI2CDataMsg = REVMsg.GetBulkI2CData()
+        packet = self.sendAndReceive(getBulkI2CDataMsg, destination)
+        return packet
+
+    def getBulkServoData(self, destination):
+        getBulkServoDataMsg = REVMsg.GetBulkServoData()
+        packet = self.sendAndReceive(getBulkServoDataMsg, destination)
+        return packet

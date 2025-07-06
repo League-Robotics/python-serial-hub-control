@@ -1,9 +1,8 @@
 """REV ControlHub Interface for the REV Color Sensor"""
 import logging
-from REVI2C import I2CDevice
-from REVConstants import *
+from .REVI2C import I2CDevice
 
-def getDominantColor(r: int, g: int, b: int) -> str:
+def getDominantColor(r, g, b):
     """ return dominant color as a string """
     m = max(r, g, b)
     if m == r:
@@ -15,14 +14,13 @@ def getDominantColor(r: int, g: int, b: int) -> str:
     return 'none'
 
 
-def rgbi2c(r: int, g: int, b: int, ir: int) -> float:
+def rgbi2c(r, g, b, ir):
     """ convert red, green, blue and ir value to clear """
     return r + g + b - 2 * ir
 
 
 class REVColorSensorV3(I2CDevice):
     """For use with the REV Color Sensor V3"""
-
 
     def __init__(self, commObj, channel, destinationModule):
         I2CDevice.__init__(self, commObj, channel, destinationModule, self._REV_COLOR_SENSOR_ADDRESS)
@@ -85,96 +83,90 @@ class REVColorSensorV3(I2CDevice):
          r, g, b, c)
 
     def getIrValue(self):
-        """Get just the range"""
         self.writeByte(self._LS_DATA_IR)
         ir = self.readMultipleBytes(3)
         self.logger.debug('IR: %d', ir)
         return ir
 
     def getGreenValue(self):
-        """Get just the green"""
         self.writeByte(self._LS_DATA_GREEN)
         green = self.readMultipleBytes(3)
         self.logger.debug('G: %d', green)
         return green
 
     def getRedValue(self):
-        """Get just the red"""
         self.writeByte(self._LS_DATA_RED)
         red = self.readMultipleBytes(3)
         self.logger.debug('R: %d', red)
         return red
 
     def getBlueValue(self):
-        """Get just the blue"""
         self.writeByte(self._LS_DATA_BLUE)
         blue = self.readMultipleBytes(3)
         self.logger.debug('B: %d', blue)
         return blue
 
     def readRegister(self, addr):
-        """Read the whole register"""
         self.writeByte(addr)
         tmp = self.readByte()
         self.logger.debug('Reading 0x%02X 0x%02X', addr, tmp)
         return tmp
 
     def printRegister(self, addr):
-        """Print Register if debug is enabled"""
         tmp = self.readRegister(addr)
         self.logger.debug('Register 0x%02X: 0x%02X', addr, tmp)
 
     def readWord(self, addr):
-        """Read the word value for the color (?)"""
         self.writeByte(addr)
         tmp = self.readMultipleBytes(2)
         self.logger.debug('Reading 0x%02X 0x%04X', addr, tmp)
         return tmp
 
     def writeRegister(self, register, value):
-        """write to the i2c register"""
         self.logger.debug('Writing 0x%02X 0x%02X', register, value)
         self.writeMultipleBytes(2, register & 255 | value << 8)
 
-_REV_COLOR_SENSOR_ADDRESS = 82
-_REV_COLOR_SENSOR_ID = 194
-_MAIN_CTRL = 0
-_PS_LED = 1
-_PS_PULSES = 2
-_PS_MEAS_RATE = 3
-_LS_MEAS_RATE = 4
-_LS_GAIN = 5
-_PART_ID = 6
-_MAIN_STATUS = 7
-_PS_DATA = 8
-_LS_DATA_IR = 10
-_LS_DATA_GREEN = 13
-_LS_DATA_BLUE = 16
-_LS_DATA_RED = 19
-_INT_CFG = 25
-_INT_PST = 26
-_PS_THRES_UP = 27
-_PS_THRES_LOW = 29
-_PS_CAN = 31
-_LS_THRES_UP = 33
-_LS_THRES_LOW = 36
-_LS_THRES_VAR = 39
-_PS_EN = 1
-_LS_EN = 2
-_RGB_MODE = 4
-_PS_MEAS_RATE_6_25ms = 1
-_PS_MEAS_RATE_12_5ms = 2
-_PS_MEAS_RATE_25ms = 3
-_PS_MEAS_RATE_50ms = 4
-_PS_MEAS_RATE_100ms = 5
-_PS_MEAS_RATE_200ms = 6
-_PS_MEAS_RATE_400ms = 7
-_PS_RES_8_BIT = 0
-_PS_RES_9_BIT = 8
-_PS_RES_10_BIT = 16
-_PS_RES_11_BIT = 24
-_LS_GAIN_1 = 0
-_LS_GAIN_3 = 1
-_LS_GAIN_6 = 2
-_LS_GAIN_9 = 3
-_LS_GAIN_18 = 4
+    _REV_COLOR_SENSOR_ADDRESS = 82
+    _REV_COLOR_SENSOR_ID = 194
+    _MAIN_CTRL = 0
+    _PS_LED = 1
+    _PS_PULSES = 2
+    _PS_MEAS_RATE = 3
+    _LS_MEAS_RATE = 4
+    _LS_GAIN = 5
+    _PART_ID = 6
+    _MAIN_STATUS = 7
+    _PS_DATA = 8
+    _LS_DATA_IR = 10
+    _LS_DATA_GREEN = 13
+    _LS_DATA_BLUE = 16
+    _LS_DATA_RED = 19
+    _INT_CFG = 25
+    _INT_PST = 26
+    _PS_THRES_UP = 27
+    _PS_THRES_LOW = 29
+    _PS_CAN = 31
+    _LS_THRES_UP = 33
+    _LS_THRES_LOW = 36
+    _LS_THRES_VAR = 39
+    _PS_EN = 1
+    _LS_EN = 2
+    _RGB_MODE = 4
+    _PS_MEAS_RATE_6_25ms = 1
+    _PS_MEAS_RATE_12_5ms = 2
+    _PS_MEAS_RATE_25ms = 3
+    _PS_MEAS_RATE_50ms = 4
+    _PS_MEAS_RATE_100ms = 5
+    _PS_MEAS_RATE_200ms = 6
+    _PS_MEAS_RATE_400ms = 7
+    _PS_RES_8_BIT = 0
+    _PS_RES_9_BIT = 8
+    _PS_RES_10_BIT = 16
+    _PS_RES_11_BIT = 24
+    _LS_GAIN_1 = 0
+    _LS_GAIN_3 = 1
+    _LS_GAIN_6 = 2
+    _LS_GAIN_9 = 3
+    _LS_GAIN_18 = 4
+
+# okay decompiling REVColorSensorV3.pyc
