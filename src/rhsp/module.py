@@ -1,7 +1,8 @@
-from . import REVI2C, adc, motors
+import rhsp.i2c
+from . import adc, motors
 from .dio import DIOPin
 from .servo import Servo
-from .internal import dio
+from .internal import dio, i2c
 from .internal.messages import LEDPattern
 from typing import TYPE_CHECKING, List, Any, Tuple
 
@@ -16,7 +17,7 @@ class Module:
         self.parent: Any = parent
         self.motors: List[motors.Motor] = []
         self.servos: List[Servo] = []
-        self.i2cChannels: List[REVI2C.I2CChannel] = []
+        self.i2cChannels: List[rhsp.i2c.I2CChannel] = []
         self.adcPins: List[adc.ADCPin] = []
         self.dioPins: List[DIOPin] = []
 
@@ -25,7 +26,7 @@ class Module:
             self.motors.append(motors.Motor(self.client, i, self.address))
             self.motors[-1].setMode(0, 1)
             self.motors[-1].setPower(0)
-            self.i2cChannels.append(REVI2C.I2CChannel(self.client, i, self.address))
+            self.i2cChannels.append(rhsp.i2c.I2CChannel(self.client, i, self.address))
 
         for j in range(0, 8):
             self.dioPins.append(DIOPin(self.client, j, self.address))
@@ -141,10 +142,10 @@ class Module:
         return versionStr
 
     def setIMUBlockReadConfig(self, startRegister, numberOfBytes, readInterval_ms):
-        REVI2C.imuBlockReadConfig(self.address, startRegister, numberOfBytes, readInterval_ms)
+        i2c.imuBlockReadConfig(self.address, startRegister, numberOfBytes, readInterval_ms)
 
     def getIMUBlockReadConfig(self):
-        return REVI2C.imuBlockReadQuery(self.address)
+        return i2c.imuBlockReadQuery(self.address)
 
     def getBulkMotorData(self):
         return self.client.getBulkMotorData(self.address)

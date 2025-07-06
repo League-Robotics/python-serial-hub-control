@@ -1,6 +1,9 @@
 """REV ControlHub Interface for the REV Color Sensor"""
 import logging
-from .REVI2C import I2CDevice
+import time
+
+from rhsp.internal.i2c import I2CConstants
+from .i2c import I2CDevice
 
 def getDominantColor(r, g, b):
     """ return dominant color as a string """
@@ -168,5 +171,74 @@ class REVColorSensorV3(I2CDevice):
     _LS_GAIN_6 = 2
     _LS_GAIN_9 = 3
     _LS_GAIN_18 = 4
+
+
+class ColorSensor(I2CDevice):
+
+    def __init__(self, commObj, channel, destinationModule):
+        I2CDevice.__init__(self, commObj, channel, destinationModule, I2CConstants.COLOR_SENSOR_ADDRESS)
+
+    def initSensor(self):
+        self.writeByte(I2CConstants.COMMAND_REGISTER_BIT | I2CConstants.ENABLE_REGISTER)
+        self.writeByte(7)
+        self.writeByte(I2CConstants.COMMAND_REGISTER_BIT | I2CConstants.ATIME_REGISTER)
+        self.writeByte(255)
+        self.writeByte(I2CConstants.COMMAND_REGISTER_BIT | I2CConstants.PPULSE_REGISTER)
+        self.writeByte(8)
+        try:
+            ident = self.getDeviceID()
+        except TypeError:
+            ident = 255
+
+        return ident == I2CConstants.COLOR_SENSOR_ID
+
+    def getEnable(self):
+        self.writeByte(I2CConstants.COMMAND_REGISTER_BIT | I2CConstants.ENABLE_REGISTER)
+        byte1 = self.readByte()
+        return byte1
+
+    def getDominantColor(self):
+        time.sleep(0.05)
+        clear = self.getClearValue()
+        red = self.getRedValue()
+        green = self.getGreenValue()
+        blue = self.getBlueValue()
+        RED = 0
+        GREEN = 2
+        BLUE = 1
+        if red > blue and red > green:
+            print('RED')
+            return RED
+        else:
+            if blue > red and blue > green:
+                print('BLUE')
+                return BLUE
+            if green > red and green > blue:
+                print('GREEN')
+                return GREEN
+            return -1
+
+    def getDeviceID(self):
+        self.writeByte(I2CConstants.COMMAND_REGISTER_BIT | I2CConstants.MULTI_BYTE_BIT | I2CConstants.ID_REGISTER)
+        return self.readByte()
+
+    def getGreenValue(self):
+        return self.getRegisterValue(I2CConstants.GDATA_REGISTER)
+
+    def getRedValue(self):
+        return self.getRegisterValue(I2CConstants.RDATA_REGISTER)
+
+    def getBlueValue(self):
+        return self.getRegisterValue(I2CConstants.BDATA_REGISTER)
+
+    def getClearValue(self):
+        return self.getRegisterValue(I2CConstants.CDATA_REGISTER)
+
+    def getProxValue(self):
+        return self.getRegisterValue(I2CConstants.PDATA_REGISTER)
+
+    def getRegisterValue(self, register):
+        self.writeByte(I2CConstants.COMMAND_REGISTER_BIT | I2CConstants.MULTI_BYTE_BIT | register)
+        return self.readMultipleBytes(2)
 
 # okay decompiling REVColorSensorV3.pyc
