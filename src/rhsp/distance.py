@@ -7,7 +7,7 @@ VcselPeriodFinalRange = 1
 
 
 
-class REV2mSensor(I2CDevice):
+class Distance2m(I2CDevice):
 
 
     _ADDRESS_I2C_DEFAULT = 41
@@ -143,7 +143,7 @@ class REV2mSensor(I2CDevice):
         self._debugPrint('first_spad_to_enable: ' + str(first_spad_to_enable))
         spads_enabled = 0
         for i in range(0, 48):
-            tmpIdx = i / 8
+            tmpIdx = int(i / 8)
             if i < first_spad_to_enable or spads_enabled == self._spad_count:
                 ref_spad_map[tmpIdx] &= ~(1 << i % 8)
                 self._debugPrint('TMP IDX A: ' + str(tmpIdx) + ' set to ' + hex(ref_spad_map[tmpIdx]))
@@ -526,7 +526,7 @@ if __name__ == '__main__':
         sys.exit()
     else:
         print('Found ' + str(numHubs) + ' hubs.')
-    sensor = REV2mSensor(commMod, 0, REVModules[0].getAddress(), False)
+    sensor = Distance2m(commMod, 0, REVModules[0].getAddress(), False)
     isSensor = sensor.Is2mDistanceSensor()
     print(str(isSensor))
     if isSensor:
