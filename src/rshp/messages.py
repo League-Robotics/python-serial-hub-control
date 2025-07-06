@@ -125,14 +125,43 @@ class REVBytes:
         hexString = '%0' + str(self.numBytes * 2) + 'X'
         hexString = hexString % int(self.data) 
         return hexString
+    
+    def as_bin(self):
+        """Returns the binary representation of the data as a string."""
+        return bin(self.data)[2:].zfill(self.numBytes * 8)
+
+    def __getitem__(self, bit_index):
+        """
+        Returns the value of the specified bit as a bool.
+        
+        Args:
+            bit_index (int): The index of the bit to retrieve (0 is LSB)
+        
+        Returns:
+            bool: True if the bit is set, False otherwise
+        
+        Raises:
+            IndexError: If the bit_index is out of range
+        """
+        if not isinstance(bit_index, int):
+            raise TypeError("Bit index must be an integer")
+        
+        if bit_index < 0 or bit_index >= (self.numBytes * 8):
+            raise IndexError(f"Bit index {bit_index} out of range (0-{self.numBytes * 8 - 1})")
+        
+        return bool((self.data >> bit_index) & 1)
 
 
 class LEDPattern:
 
-    def __init__(self):
+    def __init__(self, patt=None):
         self.patt = []
         for _ in range(15):
             self.patt.append(REVBytes(4))
+
+        if patt:
+            for i, p in enumerate(patt):
+                self.set_step(i, *p)    
 
     def set_step(self, step_num, r, g, b, t):
         r &= 255

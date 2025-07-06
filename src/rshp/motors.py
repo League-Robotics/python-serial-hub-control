@@ -1,4 +1,4 @@
-from . import REVADC, REVmessages as REVMsg, module
+from . import REVADC, messages as REVMsg, module
 
 Q16 = 65536.0
 MODE_CONSTANT_POWER = 0

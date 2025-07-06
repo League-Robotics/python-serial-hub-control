@@ -1,39 +1,40 @@
-from . import REVMotor, REVServo, REVADC, REVDIO, REVI2C
-from typing import TYPE_CHECKING
+from . import REVServo, REVADC, REVDIO, REVI2C, motors
+from .messages import LEDPattern
+from typing import TYPE_CHECKING, List, Any, Tuple
 
 if TYPE_CHECKING:
     from .client import Client
 
 class Module:
 
-    def __init__(self, commObj: "Client", address, parent):
-        self.commObj = commObj
-        self.address = address
-        self.parent = parent
-        self.motors = []
-        self.servos = []
-        self.i2cChannels = []
-        self.adcPins = []
-        self.dioPins = []
+    def __init__(self, client: "Client", address: int, parent: Any):
+        self.client: "Client" = client
+        self.address: int = address
+        self.parent: Any = parent
+        self.motors: List[motors.Motor] = []
+        self.servos: List[REVServo.Servo] = []
+        self.i2cChannels: List[REVI2C.I2CChannel] = []
+        self.adcPins: List[REVADC.ADCPin] = []
+        self.dioPins: List[REVDIO.DIOPin] = []
 
-    def init_periphs(self):
+    def init_periphs(self) -> None:
         for i in range(0, 4):
-            self.motors.append(REVMotor.Motor(self.commObj, i, self.address))
+            self.motors.append(motors.Motor(self.client, i, self.address))
             self.motors[-1].setMode(0, 1)
             self.motors[-1].setPower(0)
-            self.i2cChannels.append(REVI2C.I2CChannel(self.commObj, i, self.address))
+            self.i2cChannels.append(REVI2C.I2CChannel(self.client, i, self.address))
 
         for j in range(0, 8):
-            self.dioPins.append(REVDIO.DIOPin(self.commObj, j, self.address))
+            self.dioPins.append(REVDIO.DIOPin(self.client, j, self.address))
 
         for k in range(0, 6):
-            self.servos.append(REVServo.Servo(self.commObj, k, self.address))
+            self.servos.append(REVServo.Servo(self.client, k, self.address))
             self.servos[-1].init()
 
         for l in range(0, 4):
-            self.adcPins.append(REVADC.ADCPin(self.commObj, l, self.address))
+            self.adcPins.append(REVADC.ADCPin(self.client, l, self.address))
 
-    def killSwitch(self):
+    def killSwitch(self) -> None:
         for i in range(0, 4):
             self.motors[i].disable()
 
@@ -46,26 +47,26 @@ class Module:
         for l in range(0, 15):
             pass
 
-    def getParentStatus(self):
+    def getParentStatus(self) -> Any:
         return self.parent
 
-    def getAddress(self):
+    def getAddress(self) -> int:
         return self.address
 
-    def getStatus(self):
-        return self.commObj.getModuleStatus(self.address)
+    def getStatus(self) -> Any:
+        return self.client.getModuleStatus(self.address)
 
-    def getModuleAddress(self):
+    def getModuleAddress(self) -> int:
         return self.address
 
-    def sendKA(self):
-        return self.commObj.keepAlive(self.address)
+    def keep_alive(self) -> Any:
+        return self.client.keepAlive(self.address)
 
-    def sendFailSafe(self):
-        self.commObj.failSafe(self.address)
+    def sendFailSafe(self) -> None:
+        self.client.failSafe(self.address)
 
-    def setAddress(self, newAddress):
-        self.commObj.setNewModuleAddress(self.address, newAddress)
+    def setAddress(self, newAddress: int) -> None:
+        self.client.setNewModuleAddress(self.address, newAddress)
         self.address = newAddress
         for motor in self.motors:
             motor.setDestination(newAddress)
@@ -82,16 +83,16 @@ class Module:
         for dioPin in self.dioPins:
             dioPin.setDestination(newAddress)
 
-    def getInterface(self, interface):
-        return self.commObj.queryInterface(self.address, interface)
+    def getInterface(self, interface: Any) -> Any:
+        return self.client.queryInterface(self.address, interface)
 
-    def setLEDColor(self, red, green, blue):
-        self.commObj.setModuleLEDColor(self.address, red, green, blue)
+    def setLEDColor(self, red: int, green: int, blue: int) -> None:
+        self.client.setModuleLEDColor(self.address, red, green, blue)
 
-    def getLEDColor(self):
-        return self.commObj.getModuleLEDColor(self.address)
+    def getLEDColor(self) -> Tuple[int, int, int]:
+        return self.client.getModuleLEDColor(self.address)
 
-    def setLEDPattern(self, pattern):
+    def setLEDPattern(self, pattern: LEDPattern) -> Any:
         """ Example:
       from REVmessages import LEDPattern
 
@@ -102,34 +103,34 @@ class Module:
       hub.REVModules[0].setLEDPattern(my_pattern)
       hub.REVModules[0].keepAlive()
       """
-        return self.commObj.setModuleLEDPattern(self.address, pattern)
+        return self.client.setModuleLEDPattern(self.address, pattern)
 
     def setLogLevel(self, group, verbosity):
-        self.commObj.debugLogLevel(self.address, group, verbosity)
+        self.client.debugLogLevel(self.address, group, verbosity)
 
     def getBulkData(self):
-        return self.commObj.getBulkInputData(self.address)
+        return self.client.getBulkInputData(self.address)
 
     def enableCharging(self):
-        self.commObj.phoneChargeControl(self.address, 1)
+        self.client.phoneChargeControl(self.address, 1)
 
     def disableCharging(self):
-        self.commObj.phoneChargeControl(self.address, 0)
+        self.client.phoneChargeControl(self.address, 0)
 
     def chargingEnabled(self):
-        return self.commObj.phoneChargeQuery(self.address)
+        return self.client.phoneChargeQuery(self.address)
 
     def debugOutput(self, length, hint):
-        self.commObj.injectDataLogHint(self.address, length, hint)
+        self.client.injectDataLogHint(self.address, length, hint)
 
     def setAllDIO(self, values):
         REVDIO.setAllDIOOutputs(self.address, values)
 
     def getAllDIO(self):
-        return REVDIO.getAllDIOInputs(self.address)
+        return REVDIO.getAllDIOInputs(self.client, self.address)
 
     def getVersionString(self):
-        versionRaw = '' + self.commObj.readVersionString(self.address)
+        versionRaw = '' + self.client.readVersionString(self.address)
         versionStr = ''
         for i in range(0, int(len(versionRaw) / 2)):
             tmpHex = int(str(versionRaw)[i * 2] + str(versionRaw)[i * 2 + 1], 16)
@@ -143,13 +144,13 @@ class Module:
         return REVI2C.imuBlockReadQuery(self.address)
 
     def getBulkMotorData(self):
-        return self.commObj.getBulkMotorData(self.address)
+        return self.client.getBulkMotorData(self.address)
 
     def getBulkADCData(self):
-        return self.commObj.getBulkADCData(self.address)
+        return self.client.getBulkADCData(self.address)
 
     def getBulkI2CData(self):
-        return self.commObj.getBulkI2CData(self.address)
+        return self.client.getBulkI2CData(self.address)
 
     def getBulkServoData(self):
-        return self.commObj.getBulkServoData(self.address)
+        return self.client.getBulkServoData(self.address)

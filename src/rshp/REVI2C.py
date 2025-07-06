@@ -1,4 +1,4 @@
-from . import REVmessages as REVMsg
+from . import messages as REVMsg
 import time
 
 
