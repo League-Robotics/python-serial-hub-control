@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Debug test.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {},
+            "args": [],
+            "justMyCode": true,
+            "stopOnEntry": false,
+            "subProcess": true
+        }
+    ]
+}
