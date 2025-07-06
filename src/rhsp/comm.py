@@ -3,8 +3,9 @@ from tkinter import *
 import tkinter.ttk
 import multiprocessing as mp, time
 
-from rshp.rshp_serial import comPort
-from . import REVComPorts, messages as REVMsg
+from .internal import messages as REVMsg
+from rhsp.rshp_serial import comPort
+from . import REVComPorts
 from .module import Module
 from .rshp_serial import RHSPSerial
 import binascii, serial, time, queue

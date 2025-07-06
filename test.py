@@ -1,6 +1,6 @@
 
-from rshp import Client, Module
-from rshp.messages import LEDPattern
+from rhsp import Client, Module
+from rhsp.internal.messages import LEDPattern
 import time
 
 c = Client()

@@ -1,5 +1,5 @@
 [project]
-name = "rshp"
+name = "rhsp"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -16,4 +16,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/rshp"]
+packages = ["src/rhsp"]

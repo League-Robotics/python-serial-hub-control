@@ -1,4 +1,9 @@
-from . import messages as REVMsg
+import rhsp.internal.messages as REVMsg
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .client import Client
+
 ADC_INPUT_CHANNEL_0 = 0
 ADC_INPUT_CHANNEL_1 = 1
 ADC_INPUT_CHANNEL_2 = 2
@@ -13,30 +18,28 @@ MOTOR_CHANNEL_2_CURRENT = 10
 MOTOR_CHANNEL_3_CURRENT = 11
 VOLTAGE_5V_MONITOR = 12
 VOLTAGE_BATTERY_MONITOR = 13
-CONTROLLER_TEMPERATURE = 14
-
 class ADCPin:
 
-    def __init__(self, commObj, channel, destinationModule):
-        self.commObj = commObj
+    def __init__(self, client: "Client", channel: int, destinationModule: int):
+        self.client = client
         self.channel = channel
         self.destinationModule = destinationModule
 
-    def setDestination(self, destinationModule):
+    def setDestination(self, destinationModule: int):
         self.destinationModule = destinationModule
 
-    def getDestination(self):
+    def getDestination(self) -> int:
         return self.destinationModule
 
-    def setChannel(self, channel):
+    def setChannel(self, channel: int):
         self.channel = channel
 
-    def getChannel(self):
+    def getChannel(self) -> int:
         return self.channel
 
-    def getADC(self, rawMode):
+    def getADC(self, rawMode: bool) -> int:
         getADC = REVMsg.GetADC()
         getADC.payload.adcChannel = self.channel
         getADC.payload.rawMode = rawMode
-        packet = self.commObj.sendAndReceive(getADC, self.destinationModule)
+        packet = self.client.sendAndReceive(getADC, self.destinationModule)
         return packet.payload.adcValue

@@ -1,7 +1,7 @@
-from rshp import client
+from rhsp import client
 from serial.tools import list_ports
 import time
-from rshp.rshp_serial import comPort
+from rhsp.rshp_serial import comPort
 
 ports = comPort.enumerate()
 

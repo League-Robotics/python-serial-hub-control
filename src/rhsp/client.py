@@ -8,9 +8,9 @@ from tkinter import *
 
 import serial
 
-from rshp.rshp_serial import comPort
+from rhsp.rshp_serial import comPort
 
-from . import messages as REVMsg
+from .internal import messages as REVMsg
 from .module import Module
 from .rshp_serial import RHSPSerial
 

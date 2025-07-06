@@ -1,5 +1,7 @@
-from . import REVServo, REVADC, REVDIO, REVI2C, motors
-from .messages import LEDPattern
+from . import REVServo, REVI2C, adc, motors
+from .dio import DIOPin
+from .internal import dio
+from .internal.messages import LEDPattern
 from typing import TYPE_CHECKING, List, Any, Tuple
 
 if TYPE_CHECKING:
@@ -14,8 +16,8 @@ class Module:
         self.motors: List[motors.Motor] = []
         self.servos: List[REVServo.Servo] = []
         self.i2cChannels: List[REVI2C.I2CChannel] = []
-        self.adcPins: List[REVADC.ADCPin] = []
-        self.dioPins: List[REVDIO.DIOPin] = []
+        self.adcPins: List[adc.ADCPin] = []
+        self.dioPins: List[DIOPin] = []
 
     def init_periphs(self) -> None:
         for i in range(0, 4):
@@ -25,14 +27,14 @@ class Module:
             self.i2cChannels.append(REVI2C.I2CChannel(self.client, i, self.address))
 
         for j in range(0, 8):
-            self.dioPins.append(REVDIO.DIOPin(self.client, j, self.address))
+            self.dioPins.append(DIOPin(self.client, j, self.address))
 
         for k in range(0, 6):
             self.servos.append(REVServo.Servo(self.client, k, self.address))
             self.servos[-1].init()
 
         for l in range(0, 4):
-            self.adcPins.append(REVADC.ADCPin(self.client, l, self.address))
+            self.adcPins.append(adc.ADCPin(self.client, l, self.address))
 
     def killSwitch(self) -> None:
         for i in range(0, 4):
@@ -77,11 +79,11 @@ class Module:
         for i2cChannel in self.i2cChannels:
             i2cChannel.setDestination(newAddress)
 
-        for adcPin in self.adcPins:
-            adcPin.setDestination(newAddress)
+        for p in self.adcPins:
+            p.setDestination(newAddress)
 
-        for dioPin in self.dioPins:
-            dioPin.setDestination(newAddress)
+        for p in self.dioPins:
+            p.setDestination(newAddress)
 
     def getInterface(self, interface: Any) -> Any:
         return self.client.queryInterface(self.address, interface)
@@ -124,10 +126,10 @@ class Module:
         self.client.injectDataLogHint(self.address, length, hint)
 
     def setAllDIO(self, values):
-        REVDIO.setAllDIOOutputs(self.address, values)
+        dio.setAllDIOOutputs(self.address, values)
 
     def getAllDIO(self):
-        return REVDIO.getAllDIOInputs(self.client, self.address)
+        return dio.getAllDIOInputs(self.client, self.address)
 
     def getVersionString(self):
         versionRaw = '' + self.client.readVersionString(self.address)
