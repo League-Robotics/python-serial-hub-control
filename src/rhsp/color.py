@@ -3,6 +3,8 @@ import logging
 import time
 
 from rhsp.internal.i2c import I2CConstants
+
+
 from .i2c import I2CDevice
 
 def getDominantColor(r, g, b):

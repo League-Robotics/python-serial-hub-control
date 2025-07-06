@@ -1,13 +1,15 @@
 
-from rhsp import Client
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from rhsp import Client
     from rhsp.color import ColorSensor
+    from rhsp.color import ColorSensorV3
+    from rhsp.distance import Distance2m
+    from rhsp.imu import IMU
 
-from rhsp.color import ColorSensorV3
-from rhsp.distance import Distance2m
-from rhsp.imu import IMU
+
 from rhsp.internal.i2c import (i2cBlockReadConfig, i2cBlockReadQuery, i2cConfigureChannel, 
                                i2cConfigureQuery, i2cReadMultipleBytes, i2cReadSingleByte, 
                                i2cReadStatusQuery, i2cWriteMultipleBytes, i2cWriteSingleByte)
@@ -16,7 +18,7 @@ from rhsp.internal.i2c import (i2cBlockReadConfig, i2cBlockReadQuery, i2cConfigu
 
 class I2CDevice:
 
-    def __init__(self, client: Client, channel, destinationModule, address):
+    def __init__(self, client: "Client", channel, destinationModule, address):
         self.client = client
         self.channel = channel
         self.destinationModule = destinationModule
@@ -74,7 +76,7 @@ class I2CDevice:
 
 class I2CChannel:
 
-    def __init__(self, client: Client, channel, destinationModule):
+    def __init__(self, client: "Client", channel, destinationModule):
         self.client = client
         self.channel = channel
         self.destinationModule = destinationModule
