@@ -1,13 +1,18 @@
+import binascii
+import multiprocessing as mp
+import queue
+import time
 import tkinter as tk
-from tkinter import *
 import tkinter.ttk
-import multiprocessing as mp, time
+from tkinter import *
+
+import serial
 
 from rshp.rshp_serial import comPort
-from . import REVComPorts, REVmessages as REVMsg
-from .REVModule import Module
+
+from . import REVmessages as REVMsg
+from .module import Module
 from .rshp_serial import RHSPSerial
-import binascii, serial, time, queue
 
 defaultComPort = 0
 comPortCommand = ''
@@ -309,7 +314,7 @@ class Client:
         debugLogLevelMsg.payload.verbosityLevel = verbosityLevel
         self.sendAndReceive(debugLogLevelMsg, destination)
 
-    def discovery(self):
+    def discovery(self) -> list[Module]:
         self.discovered = REVMsg.Discovery()
         packets = self.sendAndReceive(self.discovered, 255)
         REVModules = []

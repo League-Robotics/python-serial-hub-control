@@ -1,9 +1,12 @@
 from . import REVMotor, REVServo, REVADC, REVDIO, REVI2C
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from .client import Client
 
 class Module:
 
-    def __init__(self, commObj, address, parent):
+    def __init__(self, commObj: "Client", address, parent):
         self.commObj = commObj
         self.address = address
         self.parent = parent

@@ -1,4 +1,4 @@
-from rshp import comm
+from rshp import client
 from serial.tools import list_ports
 import time
 from rshp.rshp_serial import comPort

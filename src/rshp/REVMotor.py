@@ -1,4 +1,4 @@
-from . import REVModule, REVADC, REVmessages as REVMsg
+from . import REVADC, REVmessages as REVMsg, module
 
 Q16 = 65536.0
 MODE_CONSTANT_POWER = 0
@@ -255,7 +255,7 @@ class Motor:
         resetMotorEncoder(self.commObj, self.destinationModule, self.channel)
 
     def getVelocity(self):
-        bulkData = REVModule.getBulkInputData(self.commObj, self.destinationModule)
+        bulkData = module.getBulkInputData(self.commObj, self.destinationModule)
         val = int(bulkData[self.channel + VELOCITY_OFFSET])
         bits = int(16)
         if val & 1 << bits - 1 != 0:

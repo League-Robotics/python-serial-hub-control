@@ -1,2 +1,3 @@
 
-from .comm import Client
+from .client import Client
+from .module import Module
