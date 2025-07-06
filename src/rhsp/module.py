@@ -1,5 +1,6 @@
-from . import REVServo, REVI2C, adc, motors
+from . import REVI2C, adc, motors
 from .dio import DIOPin
+from .servo import Servo
 from .internal import dio
 from .internal.messages import LEDPattern
 from typing import TYPE_CHECKING, List, Any, Tuple
@@ -14,7 +15,7 @@ class Module:
         self.address: int = address
         self.parent: Any = parent
         self.motors: List[motors.Motor] = []
-        self.servos: List[REVServo.Servo] = []
+        self.servos: List[Servo] = []
         self.i2cChannels: List[REVI2C.I2CChannel] = []
         self.adcPins: List[adc.ADCPin] = []
         self.dioPins: List[DIOPin] = []
@@ -30,7 +31,7 @@ class Module:
             self.dioPins.append(DIOPin(self.client, j, self.address))
 
         for k in range(0, 6):
-            self.servos.append(REVServo.Servo(self.client, k, self.address))
+            self.servos.append(Servo(self.client, k, self.address))
             self.servos[-1].init()
 
         for l in range(0, 4):
