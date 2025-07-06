@@ -1,9 +1,11 @@
 """
 Typed wrapper for pyserial to handle typing issues with platform-specific implementations.
 """
-from typing import Optional, Union, Any
-import serial
+import re
 import time
+from typing import Any, Optional, Union
+
+import serial
 from serial.tools import list_ports  # type: ignore
 
 
