@@ -17,5 +17,5 @@ for m in c.discovery():
 dist = m.i2cChannels[0].addDistanceSensor()
 dist.initialize()
 for i in range(0, 500):
-    print(dist.readRangeContinuousMillimeters())
+    dist = dist.readRangeContinuousMillimeters()
 
