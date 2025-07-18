@@ -18,10 +18,20 @@ m.motors[1].init()
 
 max_power = 2**15 - 1  # Maximum power for the motor
 
-for i in range(10):
-    
 
-    m.motors[0].setPower( (i/10)*max_power )  # Alternate power
-    m.motors[1].setPower( (i/10)*max_power )  # Alternate power
+m.keep_alive()
 
-    time.sleep(1)
+def speed_range():
+    for i in range(10):
+        
+
+        m.motors[0].setPower( (i/10)*max_power )  # Alternate power
+        m.motors[1].setPower( (i/10)*max_power )  # Alternate power
+
+        print(f"Motor 0 Power: {m.motors[0].getPower()} Motor 1 Power: {m.motors[1].getPower()}")
+
+        print(f"Motor 0 Velocity: {m.motors[0].getPosition()} Motor 1 Velocity: {m.motors[1].getPosition()}")
+
+        time.sleep(1)
+
+speed_range()

@@ -6,7 +6,7 @@
             "name": "Debug test.py",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/test.py",
+            "program": "${workspaceFolder}/test_motor.py",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "env": {},

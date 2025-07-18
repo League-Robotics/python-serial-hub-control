@@ -23,7 +23,7 @@ class Module:
 
     def init_periphs(self) -> None:
         for i in range(0, 4):
-            self.motors.append(motors.Motor(self.client, i, self.address))
+            self.motors.append(motors.Motor(self, self.client, i, self.address))
             self.motors[-1].setMode(0, 1)
             self.motors[-1].setPower(0)
             self.i2cChannels.append(rhsp.i2c.I2CChannel(self.client, i, self.address))
@@ -158,3 +158,9 @@ class Module:
 
     def getBulkServoData(self):
         return self.client.getBulkServoData(self.address)
+    
+    def getBulkInputData(self) -> Any:
+        """Get all bulk input data from the module."""
+        return self.client.getBulkInputData(self.address)
+    
+    
