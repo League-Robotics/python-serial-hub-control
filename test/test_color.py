@@ -14,8 +14,9 @@ c.open()
 for m in c.discovery():
     print("Status: ", m.getStatus())
 
-dist = m.i2cChannels[0].addDistanceSensor()
-dist.initialize()
+color = m.i2cChannels[0].addColorSensorV3()
+color.initSensor()
 for i in range(0, 500):
-    dist = dist.readRangeContinuousMillimeters()
-
+    d = color.getAll()
+    print(f"Color: {d}")
+    time.sleep(1)

@@ -21,7 +21,7 @@ angles += reversed(angles)
 
 for a in angles:
     d = m.getAllDIO()
-    print(f"Angle  {a} DIO: {d[1]} {d[3]}")
+    print(f"Angle  {a:3d} DIO: {d[1]} {d[3]}")
     servo.setAngle(a)
 
     #time.sleep(.0001)
