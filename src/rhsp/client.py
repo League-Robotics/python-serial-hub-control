@@ -353,6 +353,7 @@ class Client:
     def getBulkMotorData(self, destination):
         getBulkMotorDataMsg = REVMsg.GetBulkMotorData()
         packet = self.sendAndReceive(getBulkMotorDataMsg, destination)
+
         return packet
 
     def getBulkADCData(self, destination):

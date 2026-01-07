@@ -110,7 +110,7 @@ class Motor:
     def getVelocity(self):
        
 
-        bulkData = self.module.getBulkInputData()
+        bulkData = self.module.getBulkMotorData()
        
         try:
             val = int(bulkData[self.channel + VELOCITY_OFFSET])

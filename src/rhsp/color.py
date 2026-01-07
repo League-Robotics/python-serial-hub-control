@@ -86,6 +86,7 @@ class ColorSensorV3(I2CDevice):
         self.logger.debug('Device ID: 0x%0X', ident)
         if ident != self._REV_COLOR_SENSOR_ID:
             return False
+        
         self.writeRegister(self._MAIN_CTRL, self._RGB_MODE | self._LS_EN | self._PS_EN)
         self.printRegister(self._MAIN_CTRL)
         self.writeRegister(self._PS_PULSES, 32)
@@ -107,8 +108,7 @@ class ColorSensorV3(I2CDevice):
         b = tmp >> 64 & 16777215
         r = tmp >> 88 & 16777215
         self.logger.debug('R: %d, G: %d, B: %d, I: %d, Prox: %d', r, g, b, ir, d)
-        return (
-         r, g, b, ir, d)
+        return ( r, g, b, ir, d)
 
     def getProxValue(self):
         """ Returns raw proximity value """
@@ -222,6 +222,60 @@ class ColorSensor(I2CDevice):
                 print('GREEN')
                 return GREEN
             return -1
+
+    def getRGBC(self):
+        time.sleep(0.05)
+        clear = self.getClearValue()
+        red = self.getRedValue()
+        green = self.getGreenValue()
+        blue = self.getBlueValue()
+
+        return (red, green, blue, clear)
+
+
+    def getHSV(self):
+        time.sleep(0.05)
+        r, g, b, _ = self.getRGBC()
+        mx = max(r, g, b)
+        mn = min(r, g, b)
+        h = s = v = 0
+        if mx == mn:
+            h = 0
+        elif mx == r:
+            h = 60 * (0 + (g - b) / (mx - mn))
+        elif mx == g:
+            h = 60 * (2 + (b - r) / (mx - mn))
+        elif mx == b:
+            h = 60 * (4 + (r - g) / (mx - mn))
+        if mx == 0:
+            s = 0
+        else:
+            s = (mx - mn) / mx
+        v = mx / 255
+        return (h, s, v)
+
+    @staticmethod
+    def hue_to_name(hue):
+        if hue < 15 or hue >= 345:
+            return "red"
+        elif 15 <= hue < 45:
+            return "orange"
+        elif 45 <= hue < 75:
+            return "yellow"
+        elif 75 <= hue < 165:
+            return "green"
+        elif 165 <= hue < 255:
+            return "blue"
+        elif 255 <= hue < 285:
+            return "purple"
+        elif 285 <= hue < 345:
+            return "purple"
+        else:
+            return "unknown"
+
+    def getHueName(self):
+        h, _, _ = self.getHSV()
+        return self.hue_to_name(h)
 
     def getDeviceID(self):
         self.writeByte(I2CConstants.COMMAND_REGISTER_BIT | I2CConstants.MULTI_BYTE_BIT | I2CConstants.ID_REGISTER)
