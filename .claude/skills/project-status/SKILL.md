@@ -1,0 +1,1 @@
+/Volumes/Proj/proj/RobotProjects/SerialHubControl/.agents/skills/project-status/SKILL.md

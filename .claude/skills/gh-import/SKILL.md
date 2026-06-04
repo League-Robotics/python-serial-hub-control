@@ -1,0 +1,1 @@
+/Volumes/Proj/proj/RobotProjects/SerialHubControl/.agents/skills/gh-import/SKILL.md

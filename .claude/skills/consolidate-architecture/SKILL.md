@@ -1,0 +1,1 @@
+/Volumes/Proj/proj/RobotProjects/SerialHubControl/.agents/skills/consolidate-architecture/SKILL.md

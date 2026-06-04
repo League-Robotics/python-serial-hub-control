@@ -1,0 +1,1 @@
+/Volumes/Proj/proj/RobotProjects/SerialHubControl/.agents/skills/auto-approve/SKILL.md
