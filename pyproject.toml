@@ -1,14 +1,33 @@
 [project]
 name = "rhsp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Pure-Python driver for the REV Robotics Expansion/Control Hub serial protocol (RHSP / DEKA interface)"
 readme = "README.md"
 authors = [
     { name = "Eric Busboom", email = "eric@busboom.org" }
 ]
+license = "BSD-3-Clause"
+license-files = ["LICENSE.txt"]
 requires-python = ">=3.13"
+keywords = ["rev-robotics", "ftc", "expansion-hub", "control-hub", "serial", "robotics", "rhsp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "pyserial>=3.5",
+]
+
+[project.urls]
+Repository = "https://github.com/League-Robotics/python-serial-hub-control"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
 ]
 
 [build-system]
@@ -17,3 +36,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rhsp"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/rhsp",
+    "docs",
+    "test",
+    "README.md",
+    "LICENSE.txt",
+    "pyproject.toml",
+]

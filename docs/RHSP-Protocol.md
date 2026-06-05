@@ -20,20 +20,93 @@ directory:
   drift from the implementation.
 
 §9 covers the **ordering/sequencing** constraints (what must be set up before
-what), and §13 lists external **validation references** (REV's official C library,
-the FTC SDK source, and REV's Saleae protocol analyzer).
+what).
 
-> **Provenance.** This code descends from the community
-> `unofficial-rev-port` projects —
-> [SerialHubControl](https://github.com/unofficial-rev-port/SerialHubControl)
-> (the most likely direct upstream) and the GUI tool
-> [REVHubInterface](https://github.com/unofficial-rev-port/REVHubInterface),
-> which share the same message layer. The `messages.py` message definitions were
-> originally decompiled from a `.pyc` (see the trailing
-> `# okay decompiling REVmessages.pyc` marker), then reorganized into this
-> `rhsp` package (this repo is `League-Robotics/python-serial-hub-control`). The
-> protocol itself is REV's firmware-level "DEKA" interface; field names and
-> semantics below come directly from that source.
+---
+
+## Sources & references
+
+The REV Hub Serial Protocol has no single published specification; the
+authoritative description **is** the set of implementations below. They are
+listed here, grouped by language, with the specific documents/files that define
+the wire format. This document was written against the Python source and
+cross-checked against the C and Java sources.
+
+### Python implementations
+- **`League-Robotics/python-serial-hub-control`** (this repo) — the `rhsp`
+  package. Wire-format definitions: [src/rhsp/internal/messages.py](../src/rhsp/internal/messages.py);
+  framing / send-receive / checksum: [src/rhsp/client.py](../src/rhsp/client.py).
+- **[unofficial-rev-port/SerialHubControl](https://github.com/unofficial-rev-port/SerialHubControl)**
+  — most likely direct upstream of the `rhsp` package.
+- **[unofficial-rev-port/REVHubInterface](https://github.com/unofficial-rev-port/REVHubInterface)**
+  — GUI tool sharing the same message layer. The definitions originate from a
+  decompiled `REVmessages.pyc` (note the `# okay decompiling REVmessages.pyc`
+  marker still present in `messages.py`).
+- **This document's machine-readable companion:**
+  [rhsp-protocol.json](rhsp-protocol.json) and its generator
+  [generate_protocol_json.py](generate_protocol_json.py).
+
+### C / C++ / Node implementation (REV official — `librhsp`)
+- **[REVrobotics/node-rhsplib](https://github.com/REVrobotics/node-rhsplib)** —
+  REV's official C library (`librhsp`) plus a Node.js binding. The C library is
+  the **canonical reference for framing, checksum, and command encoding**, at
+  `packages/rhsplib/librhsp/`. Key documents:
+  - `src/packet.c` + `include/internal/packet.h` — packet framing, length, checksum.
+  - `include/internal/RhspRxStates.h` — the receive (parser) state machine.
+  - `src/command.c` + `include/internal/command.h` — request/response dispatch and retries.
+  - `src/rhsp.c` + `include/rhsp/rhsp.h` — top-level API; `include/rhsp/errors.h` — NACK/error codes.
+  - Per-subsystem: `motor.c`, `servo.c`, `dio.c`, `i2c.c`, `deviceControl.c`, `module.c`, `revhub.c` (with matching headers under `include/rhsp/`).
+  - Transport: `src/arch/{linux,mac,win}/serial.c` + `include/rhsp/serial.h`.
+  - Node/C++ binding: `packages/rhsplib/src/RevHubWrapper.cc` and `packages/rhsplib/lib/binding.ts` (the API surface cross-checked in §11; reviewed locally as `rhsplib-old`).
+
+### Java implementation (FTC SDK / "Lynx" — ground truth)
+- **[OpenFTC/Extracted-RC](https://github.com/OpenFTC/Extracted-RC)** — the
+  extracted FTC Robot Controller SDK. The original, most complete implementation,
+  under `Hardware/src/main/java/com/qualcomm/hardware/lynx/` ("Lynx" is REV's
+  internal name for the hub). Key documents:
+  - `commands/LynxDatagram.java` — on-wire packet framing, length, and checksum.
+  - `commands/LynxMessage.java`, `LynxCommand.java`, `LynxResponse.java`, `LynxRespondable.java` — message base classes and command/response numbering.
+  - `commands/LynxInterface.java`, `LynxInterfaceCommand.java`, `LynxInterfaceResponse.java` — the QueryInterface mechanism and dynamically-assigned interface command base ids.
+  - `commands/standard/` — the **system commands** (e.g. `LynxDiscoveryCommand`, `LynxKeepAliveCommand`, `LynxQueryInterfaceCommand`, `LynxGetModuleStatusCommand`, `LynxSetModuleLEDColorCommand`, `LynxFailSafeCommand`, `LynxSetNewModuleAddressCommand`, `LynxAck`/`LynxNack`).
+  - `commands/core/` — the **DEKA I/O commands** (base class `LynxDekaInterfaceCommand`; e.g. `LynxGetADCCommand`, `LynxGetBulkInputDataCommand`, and the motor/servo/DIO/I2C command classes). ~85 classes, one per command, each giving the exact payload layout.
+  - `LynxModule.java`, `LynxUsbDevice.java` — transport, discovery, dispatch, keep-alive; `LynxNackException.java` — error handling.
+
+### Reverse-engineered firmware & independent protocol write-up
+- **[DuckTapeAndAPrayer/DuckLynx](https://github.com/DuckTapeAndAPrayer/DuckLynx)**
+  — a clean-room **replacement firmware** (C) for the Lynx Hardware Interface
+  Board, plus reverse-engineering notes. Two documents here are especially
+  valuable because they describe the **hub (device) side** of the protocol:
+  - `info/RHSP.md` — an independent prose specification of RHSP. It is the only
+    source consulted that enumerates the **NACK codes** (§4.4), the **module/motor
+    status bitfields** (§4.5), the inter-hub **RS485 topology** (§1), the
+    **timeout semantics** (§3), and the firmware command map for the high command
+    IDs (§4.6). Cross-references the FTC SDK, the Saleae analyzer, and librhsp.
+  - `info/Stock Firmware.md` and `firmware/src/rhsp/` — notes on, and a partial
+    re-implementation of, the stock firmware's command handling.
+
+### Protocol analyzer & on-wire validation
+- **[REVrobotics/REV-Hub-Serial-Protocol-Analyzer-For-Saleae](https://github.com/REVrobotics/REV-Hub-Serial-Protocol-Analyzer-For-Saleae)**
+  — REV's official **Saleae Logic high-level analyzer** for this protocol
+  (`HighLevelAnalyzer.py`). It decodes captured RHSP/UART frames (command, header
+  fields, payload) and is the best tool for validating a reimplementation against
+  real traffic from a known-good client.
+
+### Hardware / sensor datasheets (for the I2C device layer, §7)
+- **Bosch BNO055** — absolute-orientation IMU (I2C address 0x28); register map
+  mirrored in [internal/imu.py](../src/rhsp/internal/imu.py).
+- **Broadcom/Avago APDS-9960** — RGB/proximity sensor family used by the REV
+  color sensor (I2C address 0x39); register map in
+  [internal/i2c.py](../src/rhsp/internal/i2c.py).
+- **STMicroelectronics VL53L0X** — time-of-flight distance sensor used by the
+  REV 2 m distance sensor; driver in [distance.py](../src/rhsp/distance.py).
+
+> **Provenance.** The `rhsp` message layer was originally decompiled from
+> `REVmessages.pyc` and reorganized into this package (this repo is
+> `League-Robotics/python-serial-hub-control`). The protocol is REV's
+> firmware-level **"DEKA"** interface — a name confirmed by both the C source
+> (`deviceControl.c`) and the Java source (`LynxDekaInterfaceCommand`). Field
+> names and semantics in this document come from the Python source, cross-checked
+> against the C and Java references above.
 
 ---
 
@@ -64,6 +137,19 @@ descriptor:
 This `D…` serial-number prefix is how a genuine REV hub is distinguished from
 other USB serial devices.
 
+### Topology (per DuckLynx `RHSP.md`)
+
+The link this package speaks to — controller ↔ **parent** hub — is the USB serial
+port above. Beyond that, hubs form a small network:
+
+- The **controller** (this library, or the FTC Robot Controller app) connects to
+  the **parent** hub over `UART0` (USB).
+- **Child** hubs connect to the parent over **RS485** on `UART1`, daisy-chained
+  and addressed individually.
+- The protocol is the same on both legs; the parent hub forwards/repeats packets
+  between USB and RS485. Discovery (§3.3) is what walks the RS485 chain.
+- The whole protocol is little-endian to match the ARM MCU in the hub.
+
 ---
 
 ## 2. Packet framing
@@ -91,11 +177,11 @@ Byte offsets (from
 |-------:|:----:|-------|-------------|
 | 0 | 2 | **Frame bytes** | Constant `0x44 0x4B` (ASCII `"DK"`). Marks the start of a packet. |
 | 2 | 2 | **Length** | Total packet length in bytes, little-endian (includes frame, header, payload, and checksum). |
-| 4 | 1 | **Destination** | Target module address. `255` = broadcast (used for Discovery). |
-| 5 | 1 | **Source** | Originating address. Set by the responder; on responses this is the module's address. |
-| 6 | 1 | **Message number** | Sender's sequence id for this request. |
+| 4 | 1 | **Destination** | Target module address. `0xFF` (255) = broadcast to all hubs (used for Discovery). |
+| 5 | 1 | **Source** | Originating address. **Always `0x00` for the controller**; on a reply it is the responding hub's address. |
+| 6 | 1 | **Message number** | Sender's sequence id for this request. Per spec it **must never be 0** — it starts at 1 and, on overflow, wraps back to 1. (The Python client does not honor this; see §12.) |
 | 7 | 1 | **Reference number** | On a response, echoes the request's message number (correlates response↔request). |
-| 8 | 2 | **Packet type / command** | Command id, little-endian. See §4. |
+| 8 | 2 | **Packet type / command** | Command id, little-endian. Bit 15 = response flag (§4.3). See §4. |
 | 10 | N | **Payload** | Command-specific fields. May be empty. |
 | 10+N | 1 | **Checksum** | 8-bit additive checksum (see §2.3). |
 
@@ -117,6 +203,12 @@ The value is then byte-swapped to little-endian for transmission. On receive,
 the parser rejects any frame whose declared payload length exceeds
 `PAYLOAD_MAX_SIZE = 128`.
 
+> **Max payload discrepancy.** This Python package caps the payload at **128**
+> bytes (`PAYLOAD_MAX_SIZE`). REV's `librhsp` allows up to **512** bytes
+> (`RHSP_PACKET_PAYLOAD_BUFFER_SIZE`, per DuckLynx `RHSP.md`). A reimplementation
+> that needs the large I2C/version payloads should size its receive buffer for
+> 512, not 128.
+
 ### 2.3 Checksum
 
 8-bit additive checksum over **every byte from the frame start through the end
@@ -130,7 +222,10 @@ chksum = (sum of all preceding bytes) % 256
 Computed in `REVPacket.getPacketData()`
 ([messages.py:313](../src/rhsp/internal/messages.py#L313)) and verified on
 receive in `Client.checkPacket()`
-([client.py:218](../src/rhsp/client.py#L218)).
+([client.py:218](../src/rhsp/client.py#L218)). Per the firmware spec, **if the
+checksum is wrong the hub sends no reply at all** (the packet is dropped, not
+NACK'd), and a bad-checksum packet does **not** reset the keep-alive timeout
+(§3).
 
 ### 2.4 Byte order
 
@@ -160,6 +255,24 @@ transaction at a time**. `Client.sendAndReceive(packet, destination)`
 4. Feed incoming bytes through a receive state machine (§3.2).
 5. On a complete, checksum-valid packet, decode it (`processPacket`) and return
    the response object. On checksum failure, log and resync.
+
+### 3.0 Keep-alive timeout / fail-safe (hub side)
+
+The hub runs a watchdog. Per DuckLynx `RHSP.md`:
+
+- If a hub receives **no packet for 2500 ms**, it enters **timeout mode**: it
+  signals the timeout on the LED and stops all motion by entering **fail-safe**
+  (motors/servos disabled).
+- **Any valid packet resets the timeout — even one that gets NACK'd.** A packet
+  is "valid" if it has the magic frame bytes and a correct checksum, regardless
+  of whether the command or payload is accepted.
+- Packets with a **bad checksum or missing magic number do *not* reset the
+  timeout** (and draw no reply).
+
+Therefore a controller must send *something* (typically `KeepAlive`, §4.1) at
+least every ~2.5 s while any output is active. After a fail-safe, outputs must be
+re-enabled. The `FailSafe` command lets the controller trigger this state
+deliberately (e-stop).
 
 ### 3.1 Responses: ACK vs. typed response
 
@@ -200,12 +313,20 @@ offset in `Client.processPacket()`
 ### 3.3 Discovery (broadcast)
 
 `Client.discovery()` ([client.py:317](../src/rhsp/client.py#L317)) sends a
-`Discovery` command to destination **255**. Unlike normal transactions, the hub
-(and any daisy-chained modules) may emit **multiple** `Discovery_RSP` packets.
-The client collects responses, pausing ~2 s and re-checking the input buffer,
-until no more arrive. Each `Discovery_RSP` carries a `parent` byte and its
-`source` becomes that module's address. One `Module` object is created per
-discovered module.
+`Discovery` command to destination **255** (broadcast). Unlike normal
+transactions, the hub (and any daisy-chained modules) may emit **multiple**
+`Discovery_RSP` packets. The client collects responses, pausing ~2 s and
+re-checking the input buffer, until no more arrive. Each `Discovery_RSP` carries
+a `parent` byte and its `source` becomes that module's address. One `Module`
+object is created per discovered module.
+
+How the hub side responds (DuckLynx `RHSP.md`): the **parent** hub first replies
+with its own address (changing the packet's `source` from the broadcast `0xFF`
+to its own). It then sends a discovery to **every possible child address (0–254)**
+over RS485 and forwards each child's reply back to the controller. The
+`Discovery_RSP` `parent` field (a bool) indicates whether that reply originated
+at the parent itself or was retransmitted from an RS485 child — this is how the
+controller learns the parent/child layout.
 
 ### 3.4 Addressing & message numbering
 
@@ -243,8 +364,15 @@ Command ids fall into two ranges, both defined in `MsgNum`
 | 0x7F0F | Discovery | — | Discovery_RSP: `parent`:1 (broadcast; multiple replies) |
 
 `QueryInterface` is the mechanism by which a host asks the hub for the base
-command id of a named interface ("DEKA"), returning the `packetID` offset and
-the number of commands the interface exposes.
+command id of a named interface. The `interfaceName` is a **null-terminated
+string** (e.g. `"DEKA"`); the response gives the first command id and the number
+of commands in that interface.
+
+**LED pattern step layout.** Each of the 16 `rgbtStep` entries is 4 bytes. On the
+wire (little-endian) the byte order is `[tenths-of-seconds, blue, green, red]`
+(DuckLynx `RHSP.md`). A step of all zeros terminates the pattern early. This
+matches the Python `LEDPattern.set_step`, which packs `r<<24 | g<<16 | b<<8 | t`
+(serialized little-endian → `t, b, g, r`).
 
 ### 4.2 DEKA I/O interface commands (base 0x1000 + index)
 
@@ -318,6 +446,15 @@ declares `pulseWidth` as 1 byte while the setter uses 2 bytes — see §7.
 
 > Note the gap: `GetBulkServoData` is index **64** (`0x1040`), not 58.
 
+> **⚠ Command numbering above index 0x30 diverges from current REV firmware.**
+> Indices `0x00`–`0x30` (0–48, through `ReadVersionString`) agree across this
+> Python package, `librhsp`, and the FTC SDK. From index **0x31 (49) onward the
+> Python package's map does not match REV's stock firmware / `librhsp`** — see
+> §4.6 for the side-by-side table. If you are reimplementing against a current
+> hub, use the firmware numbering in §4.6, not the Python rows above. (The Python
+> rows are accurate to *this package*, which appears to target an older or
+> non-stock command set for the high IDs.)
+
 ### 4.3 Response command ids
 
 `RESPONSE_BIT = 0x8000` ([messages.py:1295](../src/rhsp/internal/messages.py#L1295)).
@@ -326,6 +463,96 @@ A typed response's command id is `RESPONSE_BIT | requestCmd`. For example
 ([messages.py:1297](../src/rhsp/internal/messages.py#L1297)) enumerates all of
 these. (ACK/NACK replies, by contrast, use their own fixed ids `0x7F01`/`0x7F02`
 rather than a response-bit-encoded id.)
+
+### 4.4 NACK codes
+
+When a command is rejected, the hub replies with `NACK` (`0x7F02`) carrying a
+single `nackCode` byte. The Python package only prints this code; the meanings
+below are from DuckLynx `RHSP.md` (stock-firmware semantics):
+
+| Code | Meaning |
+|-----:|---------|
+| 0–9 | Parameter #N out of range (the index is the offending parameter). |
+| 10–17 | GPIO #(code−10) not configured for output. |
+| 18 | No GPIO pins configured for output. |
+| 20–27 | GPIO #(code−20) not configured for input. |
+| 28 | No GPIO pins configured for input. |
+| 30 | Servo not fully configured before being enabled. |
+| 31 | Battery voltage too low to run servo. |
+| 40 | I2C master busy (command rejected). |
+| 41 | I2C operation in progress (poll again for completion). |
+| 42 | I2C no results pending. |
+| 43 | I2C query mismatch (query doesn't match last operation). |
+| 44 | I2C timeout — SDA stuck. |
+| 45 | I2C timeout — SCK stuck. |
+| 46 | I2C timeout. |
+| 50 | Motor not fully configured for the selected mode before being enabled. |
+| 51 | Command not valid for the selected motor mode. |
+| 52 | Battery voltage too low to run motor. |
+| 253 | Command implementation pending (known/delivered but not implemented). |
+| 254 | Command routing error (known but not handled by the receiving subsystem). |
+| 255 | Packet Type ID unknown (should not happen if discovery/QueryInterface was done). |
+
+Codes 19, 29, 32–39, 47–49, 53–59 are reserved.
+
+### 4.5 Status bitfields (`GetModuleStatus` response)
+
+`GetModuleStatus` (`0x7F03`) returns two bytes. The Python layer exposes them as
+opaque `statusWord` / `motorAlerts`; the bit meanings (DuckLynx `RHSP.md`) are:
+
+**Byte 0 — Module status**
+
+| Bit | Meaning |
+|----:|---------|
+| 0 | Keep-alive timeout |
+| 1 | Device reset (set once after the device comes up from reset) |
+| 2 | Fail-safe (battery too low to run, or a keep-alive timeout) |
+| 3 | Controller over-temperature |
+| 4 | Battery low (set below ~7 V; also triggers fail-safe + LED) |
+| 5 | HIB fault |
+| 6–7 | Reserved |
+
+**Byte 1 — Motor status (alerts)**
+
+| Bit | Meaning |
+|----:|---------|
+| 0–3 | Motor 0–3 lost encoder counts |
+| 4–7 | Motor 0–3 driver overheat |
+
+### 4.6 Firmware command map for IDs ≥ 0x31 (divergence)
+
+DEKA function numbers `0x00`–`0x30` agree across implementations. From `0x31`
+onward, **REV's stock firmware / `librhsp`** (left, per DuckLynx `RHSP.md`,
+confirmed against `librhsp` `deviceControl.c` / `motor.c`) and **this Python
+package** (right, from `messages.py`) assign *different* commands to the same
+ids:
+
+| Idx | id | Stock firmware / librhsp | Python `rhsp` package |
+|----:|----|--------------------------|------------------------|
+| 0x31 | 0x1031 | `FTDI_RESET_CONTROL` | `GetBulkPIDData` |
+| 0x32 | 0x1032 | `FTDI_RESET_QUERY` | `I2CBlockReadConfig` |
+| 0x33 | 0x1033 | `SET_MOTOR_PIDF_COEFFICIENTS` | `I2CBlockReadQuery` |
+| 0x34 | 0x1034 | `I2C_WRITE_READ_MULTIPLE_BYTES` | `I2CWriteReadMultipleBytes` *(agree)* |
+| 0x35 | 0x1035 | `GET_MOTOR_PIDF_COEFFICIENTS` | `IMUBlockReadConfig` |
+| 0x36 | 0x1036 | `I2C_TRANSACTION` | `IMUBlockReadQuery` |
+| 0x37 | 0x1037 | `I2C_QUERY_TRANSACTION` | `GetBulkMotorData` |
+| 0x38 | 0x1038 | `SET_BULK_OUTPUT_DATA` | `GetBulkADCData` |
+| 0x39 | 0x1039 | `READ_VERSION` (binary firmware version) | `GetBulkI2CData` |
+
+Notes:
+- The firmware adds **PIDF** closed-loop coefficients (`0x33`/`0x35`) as a
+  superset of the older PID command (`0x17`/`0x18`), plus **FTDI reset control**
+  (`0x31`/`0x32`), a generic **I2C transaction** API (`0x36`/`0x37`), a
+  **`SET_BULK_OUTPUT_DATA`** write-everything command (`0x38`), and a binary
+  **`READ_VERSION`** (`0x39`).
+- `librhsp` resolves these at runtime via
+  `rhsp_getInterfacePacketID(hub, "DEKA", functionNumber, …)` — i.e. it adds the
+  function number to the base id returned by QueryInterface, rather than
+  hard-coding `0x1000 + n`. **A portable reimplementation should do the same.**
+- The Python package's `GetBulk*Data` / `*BlockRead*` commands at these ids are
+  not present in current stock firmware; treat them as belonging to a different
+  firmware generation and **verify against your target hub** (capture with the
+  Saleae analyzer) before relying on them.
 
 ---
 
@@ -336,7 +563,7 @@ rather than a response-bit-encoded id.)
 | Integers | Little-endian on the wire. |
 | Signed integers | Two's-complement. Encoder position is **32-bit signed**; target velocity and power are **16-bit signed**. Sign extension is applied on decode (e.g. [internal/motors.py:124](../src/rhsp/internal/motors.py#L124)). |
 | PID coefficients | **Q16 fixed-point**: transmitted as `value × 65536` in a 4-byte field; decoded by dividing by 65536 (`Q16` in [internal/motors.py:6](../src/rhsp/internal/motors.py#L6)). |
-| Strings | ASCII, packed two hex chars per byte; `ReadVersionString` returns `length` + up to 40 bytes, decoded char-by-char in [module.py:136](../src/rhsp/module.py#L136). |
+| Strings | ASCII, packed two hex chars per byte; `ReadVersionString` returns `length` + up to 40 bytes (not null-terminated), decoded char-by-char in [module.py:136](../src/rhsp/module.py#L136). The version string format is `"HW: 20, Maj: 1, Min: 8, Eng: 2"` — hardware revision (`20` = 2.0), then semantic major/minor/patch (DuckLynx `RHSP.md`). |
 
 ### 5.1 Motor modes (`motorMode`)
 
@@ -608,11 +835,13 @@ Top-level keys:
 
 | Key | Contents |
 |-----|----------|
-| `link_layer` | Baud/format and port-discovery rule (§1). |
-| `framing` | Frame bytes, header field table with offsets, checksum algorithm, payload offset (§2). |
+| `link_layer` | Baud/format, port-discovery rule, and RS485 `topology` (§1). |
+| `framing` | Frame bytes, header field table with offsets, checksum algorithm + `on_bad_checksum`, `max_payload_size` (+ librhsp note), payload offset (§2). |
 | `constants` | `response_bit` (0x8000), `deka_interface_prefix` (0x1000), broadcast address, response-id rule (§4.3). |
-| `enums` | `MotorMode`, `ZeroPowerBehavior`, `ClosedLoopMode`, `DIODirection`, `ADCChannel`, `LEDColor`, `I2CSpeedCode`. |
+| `enums` | `MotorMode`, `ZeroPowerBehavior`, `ClosedLoopMode`, `DIODirection`, `ADCChannel`, `LEDColor`, `I2CSpeedCode`, `NackCode` (§4.4), `ModuleStatusBits` / `MotorStatusBits` (§4.5). |
 | `counts` | Channel counts (4 motors, 6 servos, 8 DIO, 4 ADC, 4 I2C). |
+| `keep_alive_interval_ms` / `keep_alive_note` | 2500 ms watchdog and reset semantics (§3.0). |
+| `firmware_command_map_divergence` | Stock-firmware vs Python id map for indices ≥ 0x31 (§4.6). |
 | `commands` | Every host→hub command: `id`/`id_hex`, `group`, ordered `payload` (each field with `name`, `bytes`, `offset`, and optional `signed`/`fixed_point`/`unit`/`enum`/`range`/`description`), and the expected `reply` (`ack` or a typed response). |
 | `responses` | Every hub→host response packet with its ordered payload layout (including the bulk snapshots of §6). |
 | `sequencing` | The ordered recipes of §9 as step arrays. |
@@ -680,16 +909,25 @@ above.
 
 ## 12. Review observations / discrepancies
 
-These were noted while extracting the protocol. They are software issues in the
-**host code**, not in the wire protocol, but they affect correctness and are
-worth tracking:
+These were noted while extracting the protocol. Most are software issues in the
+**host code**; item 0 is a wire-protocol divergence. All affect correctness and
+are worth tracking:
 
-1. **`msgNum` is not a persistent counter.** In
+0. **Command numbering ≥ 0x31 diverges from current REV firmware (§4.6).** This
+   is the most important caveat for a reimplementation: the Python package's
+   `GetBulkPIDData` / `*BlockRead*` / `GetBulk*Data` commands (ids `0x1031`+) do
+   **not** match REV's stock firmware / `librhsp`, which place FTDI reset, PIDF
+   coefficients, I2C transaction, `SET_BULK_OUTPUT_DATA`, and binary
+   `READ_VERSION` at those ids. Resolve DEKA ids dynamically via QueryInterface
+   and validate the high-id commands against your target hub.
+
+1. **`msgNum` is not a persistent counter — and violates the spec.** In
    `Client.sendAndReceive` ([client.py:84](../src/rhsp/client.py#L84)) `msgNum`
    is a local that resets to 0 on every call (incrementing only across retries).
    The instance field `self.msgNum` is never used for transmission. Every first
-   transmission therefore carries `msgNum = 0`, so the response-correlation check
-   in `checkResponse` is effectively trivial.
+   transmission therefore carries `msgNum = 0`, which the protocol spec forbids
+   (message number must be ≥ 1; §2.1), and the response-correlation check in
+   `checkResponse` is effectively trivial.
 
 2. **`checkResponse` is unused on the receive path.** `sendAndReceive` returns
    the first checksum-valid decoded packet without calling `checkResponse`, so
@@ -733,62 +971,3 @@ worth tracking:
    harmless because response packets have no further response. The
    `mototonicTime` field in `GetBulkInputData_RSP` is also a misspelling of
    "monotonic".
-
----
-
-## 13. References
-
-### This project
-- **`League-Robotics/python-serial-hub-control`** — the repository this document
-  lives in; the `rhsp` Python package under [src/rhsp/](../src/rhsp/) is the
-  subject of this protocol extraction.
-- **[rhsp-protocol.json](rhsp-protocol.json)** — machine-readable command
-  catalogue (§10), generated by
-  **[generate_protocol_json.py](generate_protocol_json.py)**.
-
-### Upstream / sibling Python implementations (`unofficial-rev-port`)
-- **SerialHubControl** — <https://github.com/unofficial-rev-port/SerialHubControl>
-  — the most likely direct upstream of the `rhsp` package.
-- **REVHubInterface** — <https://github.com/unofficial-rev-port/REVHubInterface>
-  — a GUI tool sharing the same decompiled message layer (`REVmessages`); useful
-  for confirming command/payload definitions.
-
-### REV's official implementation (authoritative)
-- **`REVrobotics/RHSPlib`** — <https://github.com/REVrobotics/RHSPlib> — REV's
-  official C library (`librhsp`) implementing the REV Hub Serial Protocol. The
-  canonical reference for framing, checksum, and command encoding.
-- **`@rev-robotics/rev-hub-core`** — <https://github.com/REVrobotics> — the
-  TypeScript/Node core types and the native addon that wraps `librhsp`. A local
-  copy was reviewed at `/Users/eric/proj/RobotProjects/rhsplib-old` (see §11); its
-  `lib/binding.ts` and `src/RevHubWrapper.cc` were used to cross-validate the
-  command set, QueryInterface/Discovery semantics, and serial parameters.
-- **`REVrobotics/REV-Hub-Serial-Protocol-Analyzer-For-Saleae`** —
-  <https://github.com/REVrobotics/REV-Hub-Serial-Protocol-Analyzer-For-Saleae>
-  — REV's official **Saleae Logic high-level analyzer** for this protocol. It
-  decodes RHSP frames captured on the wire (UART), labelling each packet's
-  command, header fields, and payload. This is the single most useful reference
-  for *validating* a reimplementation: capture the traffic from a known-good
-  client, run it through this analyzer, and compare the decoded frames against
-  the bytes your implementation produces. It also serves as an independent,
-  authoritative description of the on-wire framing and command numbering.
-
-### Canonical protocol source (FTC SDK / "Lynx")
-- **`OpenFTC/Extracted-RC`** — <https://github.com/OpenFTC/Extracted-RC> — the
-  extracted FTC Robot Controller SDK. It contains the **original Java
-  implementation** of this protocol in the `com.qualcomm.hardware.lynx` package
-  ("Lynx" is REV's internal name for the hub). The `LynxModule`, `LynxCommand`,
-  `LynxMessage`, and per-command `Lynx*Command` / `Lynx*Response` classes are the
-  most complete and authoritative description of the wire protocol, packet
-  framing, command numbering (including the dynamically-assigned interface base
-  ids returned by QueryInterface), and the full DEKA command set. Recommended as
-  the ground-truth reference when this document or the Python/C implementations
-  are ambiguous.
-
-### Hardware / sensor datasheets (for the I2C device layer, §7)
-- **Bosch BNO055** — absolute-orientation IMU (I2C address 0x28); register map
-  mirrored in [internal/imu.py](../src/rhsp/internal/imu.py).
-- **Broadcom/Avago APDS-9960** — RGB/gesture/proximity sensor family used by the
-  REV color sensor (I2C address 0x39); register map in
-  [internal/i2c.py](../src/rhsp/internal/i2c.py).
-- **STMicroelectronics VL53L0X** — time-of-flight distance sensor used by the
-  REV 2 m distance sensor; driver in [distance.py](../src/rhsp/distance.py).

@@ -1,2 +1,18 @@
-__pycache__
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Build / packaging artifacts
+dist/
+build/
+*.egg-info/
+
+# Local vendored upstream GUI project (not part of this package)
 REVHubInterface

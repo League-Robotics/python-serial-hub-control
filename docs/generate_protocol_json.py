@@ -136,6 +136,69 @@ ENUMS = {
                  for n in dir(M.LEDColor) if not n.startswith("_")},
     "I2CSpeedCode": {"0": "STANDARD_100KHZ", "1": "FAST_400KHZ",
                      "_note": "Values per REV firmware; confirm against librhsp."},
+    # Source: DuckLynx info/RHSP.md (stock-firmware semantics). The Python layer
+    # only surfaces the raw byte.
+    "NackCode": {
+        "0-9": "Parameter #N out of range (N = code)",
+        "10-17": "GPIO #(code-10) not configured for output",
+        "18": "No GPIO pins configured for output",
+        "20-27": "GPIO #(code-20) not configured for input",
+        "28": "No GPIO pins configured for input",
+        "30": "Servo not fully configured before enabled",
+        "31": "Battery voltage too low to run servo",
+        "40": "I2C master busy (command rejected)",
+        "41": "I2C operation in progress (poll again)",
+        "42": "I2C no results pending",
+        "43": "I2C query mismatch",
+        "44": "I2C timeout - SDA stuck",
+        "45": "I2C timeout - SCK stuck",
+        "46": "I2C timeout",
+        "50": "Motor not fully configured for mode before enabled",
+        "51": "Command not valid for selected motor mode",
+        "52": "Battery voltage too low to run motor",
+        "253": "Command implementation pending",
+        "254": "Command routing error",
+        "255": "Packet Type ID unknown",
+        "_note": "Codes 19, 29, 32-39, 47-49, 53-59 are reserved.",
+    },
+    # GetModuleStatus response byte 0 (bit -> meaning).
+    "ModuleStatusBits": {
+        "0": "KeepAliveTimeout", "1": "DeviceReset", "2": "FailSafe",
+        "3": "ControllerOverTemp", "4": "BatteryLow", "5": "HIBFault",
+        "_note": "Bits 6-7 reserved. Source: DuckLynx info/RHSP.md.",
+    },
+    # GetModuleStatus response byte 1 (motor alerts).
+    "MotorStatusBits": {
+        "0": "Motor0LostCounts", "1": "Motor1LostCounts",
+        "2": "Motor2LostCounts", "3": "Motor3LostCounts",
+        "4": "Motor0DriverOverheat", "5": "Motor1DriverOverheat",
+        "6": "Motor2DriverOverheat", "7": "Motor3DriverOverheat",
+    },
+}
+
+# DEKA function ids >= 0x31 differ between this Python package and REV's stock
+# firmware / librhsp. Source: DuckLynx info/RHSP.md, confirmed against librhsp
+# deviceControl.c / motor.c. See docs/RHSP-Protocol.md section 4.6.
+FIRMWARE_COMMAND_MAP_DIVERGENCE = {
+    "_note": "Function ids 0x00-0x30 agree across implementations. From 0x31 "
+             "onward the stock firmware/librhsp map differs from this package's "
+             "messages.py. Resolve DEKA ids dynamically via QueryInterface and "
+             "validate high ids against the target hub.",
+    "agree_through_index": 48,
+    "stock_firmware": {
+        "49": "FTDI_RESET_CONTROL", "50": "FTDI_RESET_QUERY",
+        "51": "SET_MOTOR_PIDF_COEFFICIENTS", "52": "I2C_WRITE_READ_MULTIPLE_BYTES",
+        "53": "GET_MOTOR_PIDF_COEFFICIENTS", "54": "I2C_TRANSACTION",
+        "55": "I2C_QUERY_TRANSACTION", "56": "SET_BULK_OUTPUT_DATA",
+        "57": "READ_VERSION",
+    },
+    "python_rhsp_package": {
+        "49": "GetBulkPIDData", "50": "I2CBlockReadConfig",
+        "51": "I2CBlockReadQuery", "52": "I2CWriteReadMultipleBytes",
+        "53": "IMUBlockReadConfig", "54": "IMUBlockReadQuery",
+        "55": "GetBulkMotorData", "56": "GetBulkADCData",
+        "57": "GetBulkI2CData", "64": "GetBulkServoData",
+    },
 }
 
 # Sequencing recipes distilled from test/*.py and module.init_periphs().
@@ -310,29 +373,40 @@ def build():
             "baud": 460800, "data_bits": 8, "parity": "none", "stop_bits": 1,
             "flow_control": "none",
             "port_discovery": "USB hwid SER= field; hub serial numbers start with 'D'.",
+            "topology": "Controller <-> parent hub over USB (UART0). Child hubs "
+                        "connect to the parent over RS485 (UART1) and are reached "
+                        "via the parent's packet forwarding. Same protocol on both "
+                        "legs. Source: DuckLynx info/RHSP.md.",
         },
         "framing": {
             "frame_bytes": [0x44, 0x4B],
             "frame_bytes_ascii": "DK",
             "byte_order": "little-endian",
             "max_payload_size": M.PAYLOAD_MAX_SIZE,
+            "max_payload_size_note": "This Python package caps payload at "
+                                     "PAYLOAD_MAX_SIZE=128; REV librhsp allows up "
+                                     "to 512. Size receive buffers for 512.",
             "header_fields": [
                 {"name": "frameBytes", "bytes": 2, "offset": 0, "value": "0x44 0x4B"},
                 {"name": "packetLength", "bytes": 2, "offset": 2,
                  "description": "Total packet size in bytes incl. frame, header, payload, checksum."},
                 {"name": "destination", "bytes": 1, "offset": 4,
-                 "description": "Target module address; 255 = broadcast."},
-                {"name": "source", "bytes": 1, "offset": 5},
-                {"name": "messageNumber", "bytes": 1, "offset": 6},
+                 "description": "Target module address; 0xFF (255) = broadcast."},
+                {"name": "source", "bytes": 1, "offset": 5,
+                 "description": "Always 0x00 for the controller; the hub's address on a reply."},
+                {"name": "messageNumber", "bytes": 1, "offset": 6,
+                 "description": "Per spec must be >= 1 (never 0); starts at 1, wraps to 1 on overflow."},
                 {"name": "referenceNumber", "bytes": 1, "offset": 7,
                  "description": "On a response, echoes the request's messageNumber."},
-                {"name": "packetType", "bytes": 2, "offset": 8, "description": "Command id."},
+                {"name": "packetType", "bytes": 2, "offset": 8,
+                 "description": "Command id; bit 15 = response flag."},
             ],
             "header_bytes": 8,
             "payload_offset": 10,
             "checksum": {
                 "size_bytes": 1, "position": "last byte",
                 "algorithm": "8-bit sum of all bytes from frame start through end of payload, mod 256",
+                "on_bad_checksum": "Hub sends no reply and does not reset the keep-alive timeout.",
             },
             "min_packet_bytes": 11,
         },
@@ -351,6 +425,11 @@ def build():
             "adc_channels": 4, "i2c_channels": 4,
         },
         "keep_alive_interval_ms": 2500,
+        "keep_alive_note": "Hub enters fail-safe (outputs disabled) after 2500 ms "
+                           "with no valid packet. Any valid packet resets the "
+                           "timeout, even one that is NACK'd; bad-checksum/no-magic "
+                           "packets do not. Source: DuckLynx info/RHSP.md.",
+        "firmware_command_map_divergence": FIRMWARE_COMMAND_MAP_DIVERGENCE,
         "commands": commands,
         "responses": responses,
         "sequencing": SEQUENCING,
