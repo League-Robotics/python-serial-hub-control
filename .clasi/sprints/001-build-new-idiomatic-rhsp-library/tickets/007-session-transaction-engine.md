@@ -1,14 +1,14 @@
 ---
-id: '001-007'
-title: Session — transaction engine, msg_num sequencing, NACK, retry
-status: open
+id: 001-007
+title: "Session \u2014 transaction engine, msg_num sequencing, NACK, retry"
+status: done
 use-cases:
-  - SUC-004
-  - UC-016
-  - UC-017
+- SUC-004
+- UC-016
+- UC-017
 depends-on:
-  - '001-004'
-  - '001-006'
+- 001-004
+- 001-006
 ---
 
 # Ticket 007: Session — transaction engine, msg_num sequencing, NACK, retry
@@ -25,12 +25,12 @@ at a time. No background threads.
 
 ## Acceptance Criteria
 
-- [ ] `Session.__init__(transport: Transport, retries: int = 3, timeout: float = 1.0)`:
+- [x] `Session.__init__(transport: Transport, retries: int = 3, timeout: float = 1.0)`:
   - `_msg_num: int = 1` (internal counter)
   - `deka_base: int = 0` (set later by QueryInterface; not hard-coded)
-- [ ] `_msg_num` increments on each transaction; wraps from 255 back to 1 (never 0)
-- [ ] `_msg_num` is never 0 at any point (including initialization and wrap)
-- [ ] `transaction(command_name: str, dest: int, **fields) -> dict | None`:
+- [x] `_msg_num` increments on each transaction; wraps from 255 back to 1 (never 0)
+- [x] `_msg_num` is never 0 at any point (including initialization and wrap)
+- [x] `transaction(command_name: str, dest: int, **fields) -> dict | None`:
   - Looks up command in `catalogue.COMMANDS`
   - Calls `encode_payload` to build the request payload
   - Calls `runtime_packet_id(cmd, self.deka_base)` to get the packet type id
@@ -44,7 +44,7 @@ at a time. No background threads.
   - On ACK response (reply_kind == "ack"): returns `None`
   - On RSP response (reply_kind == "rsp"): decodes payload via `decode_payload` and returns dict
   - Mismatched response discarded; session waits for next packet or times out
-- [ ] `discover(dest: int = 0xFF) -> list[RawPacket]`:
+- [x] `discover(dest: int = 0xFF) -> list[RawPacket]`:
   - Sends Discovery frame to `0xFF`
   - Collects all replies until a quiet window (no bytes for ~50 ms)
   - Returns list of `RawPacket` objects (not subject to ref_num correlation)
@@ -52,12 +52,12 @@ at a time. No background threads.
 
 ## Acceptance Criteria (test assertions)
 
-- [ ] 300 consecutive `transaction()` calls: `_msg_num` never equals 0
-- [ ] After 254 transactions starting at 1, `_msg_num` wraps to 1 (not 0)
-- [ ] FakeHub returns mismatched `ref_num=99` first, then correct `ref_num`; session discards first and accepts second
-- [ ] FakeHub returns NACK code 50; `transaction()` raises `NackError(50, ...)`; not retried
-- [ ] FakeHub returns no response for all retries; `transaction()` raises `RhspTimeoutError`
-- [ ] FakeHub answers QueryInterface with `packetID=0x1000`; after calling `session.query_interface("DEKA")`, `session.deka_base == 0x1000` (note: `query_interface` is a typed method added in ticket 008, but the `deka_base` attribute is part of the Session state established here)
+- [x] 300 consecutive `transaction()` calls: `_msg_num` never equals 0
+- [x] After 254 transactions starting at 1, `_msg_num` wraps to 1 (not 0)
+- [x] FakeHub returns mismatched `ref_num=99` first, then correct `ref_num`; session discards first and accepts second
+- [x] FakeHub returns NACK code 50; `transaction()` raises `NackError(50, ...)`; not retried
+- [x] FakeHub returns no response for all retries; `transaction()` raises `RhspTimeoutError`
+- [x] FakeHub answers QueryInterface with `packetID=0x1000`; after calling `session.query_interface("DEKA")`, `session.deka_base == 0x1000` (note: `query_interface` is a typed method added in ticket 008, but the `deka_base` attribute is part of the Session state established here)
 
 ## Implementation Plan
 
