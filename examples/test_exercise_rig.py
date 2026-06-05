@@ -24,8 +24,8 @@ MOTOR_PORTS = (0, 1)
 ARM_SERVO = 1          # swings the colour card past the sensors
 MAGNET_SERVO = 0       # swings the magnet past the magnetic switch
 MAGNET_DIO = (0, 1)    # the magnetic switch reads low on these digital pins
-COLOUR_CHANNEL = 1     # I2C channel for the colour sensor
-DISTANCE_CHANNEL = 0   # I2C channel for the distance sensor
+COLOUR_CHANNEL = 3     # I2C channel for the colour sensor (hub port 4)
+DISTANCE_CHANNEL = 2   # I2C channel for the distance sensor (hub port 3)
 # TODO(api): hub.i2c[n].device(0x39) + ColorSensor(...) leaks the I2C address;
 #            iterate toward hub.i2c[n].colour_sensor() / .distance_sensor().
 COLOUR_I2C_ADDRESS = 0x39
@@ -120,7 +120,6 @@ def main() -> None:
     with rhsp.connect(ports[0]) as hub:
         print(f"connected: {hub.read_version_string()}  (address {hub.address})")
         hub.init_peripherals()
-        hub.set_led_color(0, 32, 0)  # dim green — overrides the per-packet blue flash
         colour, distance = setup_sensors(hub)
         for cycle in range(1, CYCLES + 1):
             print(f"\n===== exercise cycle {cycle}/{CYCLES} =====")
