@@ -1,12 +1,12 @@
 ---
-id: '001-015'
+id: 001-015
 title: Invert generate_protocol_json.py to introspect catalogue.py
-status: open
+status: done
 use-cases:
-  - SUC-009
-  - UC-025
+- SUC-009
+- UC-025
 depends-on:
-  - '001-014'
+- 001-014
 ---
 
 # Ticket 015: Invert generate_protocol_json.py to introspect catalogue.py
@@ -24,24 +24,24 @@ surfaces any drift between the runtime catalogue and the committed spec.
 
 ## Acceptance Criteria
 
-- [ ] `docs/generate_protocol_json.py`:
+- [x] `docs/generate_protocol_json.py`:
   - Imports `rhsp.catalogue.COMMANDS` and `rhsp.catalogue.RESPONSES_BY_ID`
   - Iterates commands and responses to produce a JSON structure matching the committed `protocol.json` schema
   - Does NOT read the original `docs/rhsp-protocol.json` as input — it reads the live catalogue tables
-- [ ] `python docs/generate_protocol_json.py` runs without error (requires `uv run`)
-- [ ] The generated JSON, when diffed against `src/rhsp/protocol.json`, shows no meaningful differences:
+- [x] `python docs/generate_protocol_json.py` runs without error (requires `uv run`)
+- [x] The generated JSON, when diffed against `src/rhsp/protocol.json`, shows no meaningful differences:
   - Same commands with same names, ids, groups, indices, field layouts, reply kinds
   - Same responses with same names, ids, field layouts
   - Enum values match
   - The `signed` flag for encoder/velocity fields in `BulkInputData` response may differ
     (see open question 3 — document this explicitly if it appears in the diff)
-- [ ] If a diff is detected, the ticket is NOT complete until either:
+- [x] If a diff is detected, the ticket is NOT complete until either:
   - The JSON is updated to match the catalogue (if the catalogue is correct), OR
   - The catalogue is corrected (if the JSON is correct), AND
   - The reason for the drift is documented in a comment in `generate_protocol_json.py`
-- [ ] The script exits with code 0 if the generated JSON matches committed JSON; code 1 if there is a diff
+- [x] The script exits with code 0 if the generated JSON matches committed JSON; code 1 if there is a diff
   (making it usable as a CI gate)
-- [ ] `uv run python docs/generate_protocol_json.py` exits 0 at sprint close
+- [x] `uv run python docs/generate_protocol_json.py` exits 0 at sprint close
 
 ## Implementation Plan
 
