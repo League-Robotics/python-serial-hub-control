@@ -382,9 +382,13 @@ class Session:
         """
         if len(steps) != 16:
             raise ValueError(f"steps must have exactly 16 entries, got {len(steps)}")
-        fields: dict[str, bytes] = {}
+        # Each rgbtStep is a 4-byte little-endian field: [R, G, B, T] on the wire.
+        # Encode as int so the codec's to_bytes(4, "little") produces [R, G, B, T].
+        fields: dict[str, int] = {}
         for i, (r, g, b, t) in enumerate(steps):
-            fields[f"rgbtStep{i}"] = bytes([r & 0xFF, g & 0xFF, b & 0xFF, t & 0xFF])
+            fields[f"rgbtStep{i}"] = (
+                (r & 0xFF) | ((g & 0xFF) << 8) | ((b & 0xFF) << 16) | ((t & 0xFF) << 24)
+            )
         self.transaction("SetModuleLEDPattern", dest=dest, **fields)
 
     def get_module_led_color(self, dest: int) -> tuple[int, int, int]:
