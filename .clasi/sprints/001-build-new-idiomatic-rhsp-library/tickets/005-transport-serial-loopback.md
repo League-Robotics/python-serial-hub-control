@@ -1,11 +1,11 @@
 ---
-id: '001-005'
-title: Transport — SerialTransport and LoopbackTransport
-status: open
+id: 001-005
+title: "Transport \u2014 SerialTransport and LoopbackTransport"
+status: done
 use-cases:
-  - SUC-004
+- SUC-004
 depends-on:
-  - '001-001'
+- 001-001
 ---
 
 # Ticket 005: Transport — SerialTransport and LoopbackTransport
@@ -21,15 +21,15 @@ Implement `src/rhsp/transport.py`: the `Transport` structural Protocol, the
 
 ## Acceptance Criteria
 
-- [ ] `Transport` is a `typing.Protocol` with methods: `write(data: bytes) -> None`,
+- [x] `Transport` is a `typing.Protocol` with methods: `write(data: bytes) -> None`,
   `read(n: int) -> bytes`, `reset_input() -> None`, `close() -> None`
-- [ ] `SerialTransport.__init__(port: str, baud: int = 460800, timeout: float = 1.0, inter_byte_timeout: float = 0.01)`:
+- [x] `SerialTransport.__init__(port: str, baud: int = 460800, timeout: float = 1.0, inter_byte_timeout: float = 0.01)`:
   - Opens a pyserial `Serial` object in 8N1, no hardware flow control
   - Uses blocking `read` with `timeout` and `inter_byte_timeout` (kills busy-wait)
   - `read(n)` returns up to `n` bytes (may return fewer on timeout)
   - `reset_input()` calls `serial.reset_input_buffer()`
   - `close()` closes the port
-- [ ] `LoopbackTransport`:
+- [x] `LoopbackTransport`:
   - Backed by two in-memory byte buffers: one for "host writes → hub reads", one for "hub writes → host reads"
   - `write(data)` appends to the write buffer
   - `read(n)` pops up to `n` bytes from the read buffer; blocks (or returns empty) if none available
@@ -37,9 +37,9 @@ Implement `src/rhsp/transport.py`: the `Transport` structural Protocol, the
   - `close()` is a no-op
   - Exposes `inject(data: bytes)` to add bytes to the read buffer (FakeHub uses this)
   - Exposes `drain_writes() -> bytes` to read what was written by the session (FakeHub uses this)
-- [ ] `LoopbackTransport` echo test: `write(b"hello")` then `inject(b"hello")` then `read(5)` returns `b"hello"`
-- [ ] `SerialTransport` satisfies the `Transport` Protocol (mypy/pyright structural check passes)
-- [ ] `LoopbackTransport` satisfies the `Transport` Protocol
+- [x] `LoopbackTransport` echo test: `write(b"hello")` then `inject(b"hello")` then `read(5)` returns `b"hello"`
+- [x] `SerialTransport` satisfies the `Transport` Protocol (mypy/pyright structural check passes)
+- [x] `LoopbackTransport` satisfies the `Transport` Protocol
 
 ## Implementation Plan
 
