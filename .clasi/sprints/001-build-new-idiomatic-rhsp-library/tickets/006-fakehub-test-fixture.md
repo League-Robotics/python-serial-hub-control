@@ -1,16 +1,16 @@
 ---
-id: '001-006'
+id: 001-006
 title: FakeHub test fixture
-status: open
+status: done
 use-cases:
-  - SUC-004
-  - SUC-005
-  - SUC-006
-  - SUC-007
-  - SUC-008
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
+- SUC-008
 depends-on:
-  - '001-004'
-  - '001-005'
+- 001-004
+- 001-005
 ---
 
 # Ticket 006: FakeHub test fixture
@@ -26,17 +26,17 @@ bytes sent by the session/device/sensor layers.
 
 ## Acceptance Criteria
 
-- [ ] `FakeHub` is constructed with a `LoopbackTransport` and exposes a `Session`-compatible interface
-- [ ] `FakeHub` answers `KeepAlive` (0x7F04) with an ACK (0x7F01) response
-- [ ] `FakeHub` answers `Discovery` (0x7F0F) with a `Discovery_RSP` packet carrying `parent=True` and `src=1`
-- [ ] `FakeHub` answers `QueryInterface("DEKA")` with `packetID=0x1000, numValues=49`
-- [ ] `FakeHub` supports configuring a NACK response for a specific command:
+- [x] `FakeHub` is constructed with a `LoopbackTransport` and exposes a `Session`-compatible interface
+- [x] `FakeHub` answers `KeepAlive` (0x7F04) with an ACK (0x7F01) response
+- [x] `FakeHub` answers `Discovery` (0x7F0F) with a `Discovery_RSP` packet carrying `parent=True` and `src=1`
+- [x] `FakeHub` answers `QueryInterface("DEKA")` with `packetID=0x1000, numValues=49`
+- [x] `FakeHub` supports configuring a NACK response for a specific command:
   `fake.set_nack(command_name, nack_code)` — causes the next transaction for that command to return NACK
-- [ ] `FakeHub` records all requests received: `fake.requests` is a list of `RawPacket` objects
-- [ ] `FakeHub` records all payloads decoded by command name: `fake.payloads[command_name]` returns the last decoded dict
-- [ ] `FakeHub.run_in_thread()` starts a background thread that processes requests on the `LoopbackTransport`
-- [ ] `FakeHub` correctly echoes the `msg_num` from the request as `ref_num` in the response
-- [ ] `tests/test_fakehub.py` asserts: FakeHub answers KeepAlive with ACK; FakeHub records the request; NACK path triggers `NackError` on the session side
+- [x] `FakeHub` records all requests received: `fake.requests` is a list of `RawPacket` objects
+- [x] `FakeHub` records all payloads decoded by command name: `fake.payloads[command_name]` returns the last decoded dict
+- [x] `FakeHub.run_in_thread()` starts a background thread that processes requests on the `LoopbackTransport`
+- [x] `FakeHub` correctly echoes the `msg_num` from the request as `ref_num` in the response
+- [x] `tests/test_fakehub.py` asserts: FakeHub answers KeepAlive with ACK; FakeHub records the request; NACK path triggers `NackError` on the session side
 
 ## Implementation Plan
 
