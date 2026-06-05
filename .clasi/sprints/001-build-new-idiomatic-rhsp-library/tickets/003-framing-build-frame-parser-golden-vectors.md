@@ -1,11 +1,11 @@
 ---
-id: '001-003'
-title: Framing — build_frame, FrameParser, golden vectors
-status: open
+id: 001-003
+title: "Framing \u2014 build_frame, FrameParser, golden vectors"
+status: done
 use-cases:
-  - SUC-002
+- SUC-002
 depends-on:
-  - '001-001'
+- 001-001
 ---
 
 # Ticket 003: Framing — build_frame, FrameParser, golden vectors
@@ -22,26 +22,26 @@ only byte layout; it is unaware of command semantics.
 
 ## Acceptance Criteria
 
-- [ ] `FRAME: bytes = b"DK"`
-- [ ] `HEADER = struct.Struct("<2sHBBBBH")` (10 bytes: frame(2) + length(2) + dest(1) + src(1) + msg(1) + ref(1) + ptype(2))
-- [ ] `MAX_PACKET: int = 523` (512 payload + 10 header + 1 checksum)
-- [ ] `checksum(buf: bytes) -> int` returns `sum(buf) & 0xFF`
-- [ ] `build_frame(dest, src, msg, ref, ptype, payload) -> bytes`:
+- [x] `FRAME: bytes = b"DK"`
+- [x] `HEADER = struct.Struct("<2sHBBBBH")` (10 bytes: frame(2) + length(2) + dest(1) + src(1) + msg(1) + ref(1) + ptype(2))
+- [x] `MAX_PACKET: int = 523` (512 payload + 10 header + 1 checksum)
+- [x] `checksum(buf: bytes) -> int` returns `sum(buf) & 0xFF`
+- [x] `build_frame(dest, src, msg, ref, ptype, payload) -> bytes`:
   - length field = `10 + len(payload) + 1`
   - appends checksum of the entire packet excluding the checksum byte
-- [ ] `RawPacket` is a frozen dataclass: `dest: int`, `src: int`, `msg_num: int`, `ref_num: int`, `packet_type: int`, `payload: bytes`
-- [ ] `FrameParser.feed(data: bytes) -> Iterator[RawPacket]`:
+- [x] `RawPacket` is a frozen dataclass: `dest: int`, `src: int`, `msg_num: int`, `ref_num: int`, `packet_type: int`, `payload: bytes`
+- [x] `FrameParser.feed(data: bytes) -> Iterator[RawPacket]`:
   - Resyncs on `DK` magic bytes after noise or corruption
   - Bounds payload to 512 bytes
   - Raises `ChecksumError` on checksum mismatch (then resyncs)
   - Handles fragmented input across multiple `feed()` calls
-- [ ] Golden vector assertions pass:
+- [x] Golden vector assertions pass:
   - `KeepAlive` dest=1 msg=1 → `44 4B 0B 00 01 00 01 00 04 7F 1F`
   - `Discovery` dest=255 msg=1 → `44 4B 0B 00 FF 00 01 00 0F 7F 28`
   - `SetServoPulseWidth` ch=0 pw=1500 dest=1 msg=1 → `44 4B 0E 00 01 00 01 00 21 10 00 DC 05 B1`
   - `SetMotorConstantPower` ch=0 pwr=16000 dest=1 msg=1 → `44 4B 0E 00 01 00 01 00 0F 10 00 80 3E 7C`
-- [ ] `FrameParser` round-trips: parse each golden vector → `RawPacket` with correct fields
-- [ ] `FrameParser` raises `ChecksumError` when the last byte is flipped by 1
+- [x] `FrameParser` round-trips: parse each golden vector → `RawPacket` with correct fields
+- [x] `FrameParser` raises `ChecksumError` when the last byte is flipped by 1
 
 ## Implementation Plan
 
