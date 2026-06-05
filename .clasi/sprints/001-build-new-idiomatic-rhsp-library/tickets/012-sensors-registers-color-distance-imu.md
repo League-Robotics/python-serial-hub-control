@@ -1,14 +1,14 @@
 ---
-id: '001-012'
-title: Sensors — registers.py, ColorSensor, Distance2m, IMU
-status: open
+id: 001-012
+title: "Sensors \u2014 registers.py, ColorSensor, Distance2m, IMU"
+status: done
 use-cases:
-  - SUC-008
-  - UC-012
-  - UC-013
-  - UC-014
+- SUC-008
+- UC-012
+- UC-013
+- UC-014
 depends-on:
-  - '001-011'
+- 001-011
 ---
 
 # Ticket 012: Sensors — registers.py, ColorSensor, Distance2m, IMU
@@ -27,54 +27,54 @@ is P7-f.
 
 **`sensors/registers.py`:**
 
-- [ ] APDS-9960 (color sensor) register constants:
+- [x] APDS-9960 (color sensor) register constants:
   - `COMMAND_BIT = 0x80`
   - `MULTI_BYTE_BIT = 0x20`
   - `APDS9960_ENABLE`, `APDS9960_ATIME`, `APDS9960_PPULSE`, `APDS9960_ID`
   - Color data registers: `APDS9960_CDATAL`, `APDS9960_RDATAL`, `APDS9960_GDATAL`, `APDS9960_BDATAL`
   - `APDS9960_DEVICE_ID = 0x60`
-- [ ] VL53L0X (distance sensor) register constants:
+- [x] VL53L0X (distance sensor) register constants:
   - `OSC_CALIBRATE_VAL = 0xF8` — must be present (P7-f fix)
   - SPAD config registers, signal rate limit, GPIO interrupt registers, range result register,
     interrupt clear register, stop variable register
   - All constants needed for the ST initialization sequence from §2.14
-- [ ] BNO055 (IMU) register constants as needed by `imu.py`
+- [x] BNO055 (IMU) register constants as needed by `imu.py`
 
 **`sensors/color.py` — `ColorSensor` / `ColorSensorV3`:**
 
-- [ ] `ColorSensor.__init__(device: I2CDevice)`:
+- [x] `ColorSensor.__init__(device: I2CDevice)`:
   - Writes ENABLE register (enable ALS + proximity)
   - Writes ATIME register
   - Writes PPULSE register
   - Reads device id register; raises `ProtocolError("unexpected color sensor id")` if not 0x60
-- [ ] `read_color() -> tuple[int, int, int, int]`:
+- [x] `read_color() -> tuple[int, int, int, int]`:
   - Issues `COMMAND_BIT | MULTI_BYTE_BIT | APDS9960_CDATAL` read (8 bytes for RGBC)
   - Returns `(red, green, blue, clear)` decoded from LE 16-bit pairs
-- [ ] FakeHub test: `ColorSensor.__init__()` emits ENABLE write, ATIME write, PPULSE write, ID read — in that order
+- [x] FakeHub test: `ColorSensor.__init__()` emits ENABLE write, ATIME write, PPULSE write, ID read — in that order
 
 **`sensors/distance.py` — `Distance2m`:**
 
-- [ ] `Distance2m.__init__(device: I2CDevice)`:
+- [x] `Distance2m.__init__(device: I2CDevice)`:
   - Runs the full VL53L0X initialization sequence from §2.14:
     read `stop_variable`, set signal-rate limit, load SPAD config, write default tuning
     register map, configure GPIO interrupt, run `performSingleRefCalibration(0x40)` then `(0x00)`,
     `setTimeout(200)`, `startContinuous()`
   - Uses `OSC_CALIBRATE_VAL = 0xF8` from `registers.py` where specified in the sequence
-- [ ] `read_mm() -> int`:
+- [x] `read_mm() -> int`:
   - Polls interrupt status register until asserted (up to timeout)
   - Reads range result register
   - Clears interrupt
   - Returns distance in millimeters
-- [ ] FakeHub test: `Distance2m.__init__()` emits the full VL53L0X init sequence; `OSC_CALIBRATE_VAL` appears in the sequence
-- [ ] FakeHub test: `read_mm()` issues interrupt poll + range read + interrupt clear in order
+- [x] FakeHub test: `Distance2m.__init__()` emits the full VL53L0X init sequence; `OSC_CALIBRATE_VAL` appears in the sequence
+- [x] FakeHub test: `read_mm()` issues interrupt poll + range read + interrupt clear in order
 
 **`sensors/imu.py` — `IMU`:**
 
-- [ ] `IMU.__init__(session: Session, dest: int)` (IMU is on the internal bus, not an external I2C channel):
+- [x] `IMU.__init__(session: Session, dest: int)` (IMU is on the internal bus, not an external I2C channel):
   - Calls `session.transaction("IMUBlockReadConfig", dest, startRegister=..., numberOfBytes=10, readInterval_ms=10)` to configure hub-side autonomous polling
-- [ ] `read_imu_block() -> bytes`:
+- [x] `read_imu_block() -> bytes`:
   - Calls `session.get_bulk_input_data(dest)` and returns `bulk.imu_block` (10 bytes)
-- [ ] FakeHub test: `IMU.__init__()` sends `IMUBlockReadConfig` with correct parameters
+- [x] FakeHub test: `IMU.__init__()` sends `IMUBlockReadConfig` with correct parameters
 
 ## Implementation Plan
 
