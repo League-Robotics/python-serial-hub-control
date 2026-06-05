@@ -222,7 +222,7 @@ def connect(
     # Construct and return the Hub object.
     from rhsp.hub import Hub  # imported here to avoid circular dependency
 
-    parent_hub = Hub(session=session, address=parent_address)
+    parent_hub = Hub(session=session, address=parent_address, parent=True)
     parent_hub.children = [
         Hub(session=session, address=addr) for addr in child_addresses
     ]
