@@ -1,11 +1,11 @@
 ---
-id: '001-002'
-title: Codec — encode/decode with signed, Q16, and variable-length fields
-status: open
+id: 001-002
+title: "Codec \u2014 encode/decode with signed, Q16, and variable-length fields"
+status: done
 use-cases:
-  - SUC-001
+- SUC-001
 depends-on:
-  - '001-001'
+- 001-001
 ---
 
 # Ticket 002: Codec — encode/decode with signed, Q16, and variable-length fields
@@ -22,31 +22,31 @@ the `Field` descriptors passed in.
 
 ## Acceptance Criteria
 
-- [ ] `Field` is a frozen dataclass with slots: `name: str`, `nbytes: int`,
+- [x] `Field` is a frozen dataclass with slots: `name: str`, `nbytes: int`,
   `offset: int`, `signed: bool = False`, `fixed_point: int | None = None`,
   `unit: str | None = None`, `enum: str | None = None`, `range: tuple[int,int] | None = None`
-- [ ] `Command` is a frozen dataclass with slots: `name`, `id`, `group`, `index`,
+- [x] `Command` is a frozen dataclass with slots: `name`, `id`, `group`, `index`,
   `fields: tuple[Field, ...]`, `reply_kind`, `reply_id`, `reply_name`,
   `legacy: bool = False`, `notes: str = ""`
-- [ ] `Response` is a frozen dataclass with slots: `name`, `id`, `fields: tuple[Field, ...]`
-- [ ] `encode_payload(fields, values) -> bytes`:
+- [x] `Response` is a frozen dataclass with slots: `name`, `id`, `fields: tuple[Field, ...]`
+- [x] `encode_payload(fields, values) -> bytes`:
   - Encodes each field using `int.to_bytes(n, "little", signed=field.signed)`
   - For `fixed_point` fields: value is `round(float_value * field.fixed_point)`, stored as signed-`nbytes`
   - Last field absorbs remaining bytes for variable-length fields (bytes/str values passed through)
   - Concatenates all encoded fields in order
-- [ ] `decode_payload(fields, data) -> dict`:
+- [x] `decode_payload(fields, data) -> dict`:
   - Decodes each field using `int.from_bytes(slice, "little", signed=field.signed)`
   - For `fixed_point` fields: returns `raw_int / field.fixed_point` as float
   - Last field absorbs remaining data bytes
   - Returns dict keyed by field name
-- [ ] `decode(encode(values)) == values` for:
+- [x] `decode(encode(values)) == values` for:
   - `signed=True` 16-bit field at min (−32768) and max (32767)
   - `signed=True` 32-bit field at min (−2147483648) and max (2147483647)
   - Q16 field (`fixed_point=65536`) with value `1.5` (encode → `round(1.5*65536)=98304`)
   - Q16 field with value `−1.5`
   - Variable-length last field with 512 bytes of content
   - Variable-length last field with 0 bytes (empty)
-- [ ] `tests/test_codec.py` round-trip test covers all 72 commands and 38 responses (using field descriptors built by hand or loaded via catalogue once ticket 004 exists; for this ticket, at least a representative set of 10+ entries)
+- [x] `tests/test_codec.py` round-trip test covers all 72 commands and 38 responses (using field descriptors built by hand or loaded via catalogue once ticket 004 exists; for this ticket, at least a representative set of 10+ entries)
 
 ## Implementation Plan
 
