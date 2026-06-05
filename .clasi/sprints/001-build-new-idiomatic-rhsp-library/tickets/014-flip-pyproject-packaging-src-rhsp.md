@@ -1,11 +1,11 @@
 ---
-id: '001-014'
+id: 001-014
 title: Flip pyproject packaging to src/rhsp and uv sync
-status: open
+status: done
 use-cases:
-  - SUC-009
+- SUC-009
 depends-on:
-  - '001-013'
+- 001-013
 ---
 
 # Ticket 014: Flip pyproject packaging to src/rhsp and uv sync
@@ -22,17 +22,17 @@ for on-hardware comparison with the new implementation.
 
 ## Acceptance Criteria
 
-- [ ] `pyproject.toml` packaging source points to `src/` (or `src/rhsp/` specifically):
+- [x] `pyproject.toml` packaging source points to `src/` (or `src/rhsp/` specifically):
   - The `packages` / `package-dir` / `tool.hatch.build` or equivalent setting references `src/rhsp`
   - `vendor/rhsp` is no longer listed as the installed package location
   - `src/rhsp/protocol.json` is included in the package data
-- [ ] `uv sync` runs without errors
-- [ ] `uv lock` is regenerated and committed
-- [ ] `python -c "import rhsp; print(rhsp.__file__)"` prints a path under `src/rhsp/`
-- [ ] `python -c "import rhsp; print(rhsp.__file__)"` does NOT print a path under `vendor/rhsp/`
-- [ ] `uv run pytest tests/` passes (no regression from the packaging change)
-- [ ] `uv run pytest examples/` exits 0 (no hub needed; examples skip)
-- [ ] `vendor/rhsp/` directory is still present and unmodified
+- [x] `uv sync` runs without errors
+- [x] `uv lock` is regenerated and committed
+- [x] `python -c "import rhsp; print(rhsp.__file__)"` prints a path under `src/rhsp/`
+- [x] `python -c "import rhsp; print(rhsp.__file__)"` does NOT print a path under `vendor/rhsp/`
+- [x] `uv run pytest tests/` passes (no regression from the packaging change)
+- [x] `uv run pytest examples/` exits 0 (no hub needed; examples skip)
+- [x] `vendor/rhsp/` directory is still present and unmodified
 
 ## Implementation Plan
 
