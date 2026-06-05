@@ -30,8 +30,8 @@ def test_commands_count() -> None:
 
 
 def test_responses_by_id_count() -> None:
-    """Catalogue must have exactly 38 response entries."""
-    assert len(RESPONSES_BY_ID) == 38
+    """Catalogue must have exactly 39 response entries (38 original + I2CConfigureQuery_RSP)."""
+    assert len(RESPONSES_BY_ID) == 39
 
 
 # ---------------------------------------------------------------------------

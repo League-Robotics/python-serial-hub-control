@@ -1,23 +1,23 @@
 ---
-id: '001-008'
+id: 001-008
 title: Session typed methods (~40 snake_case wrappers)
-status: open
+status: done
 use-cases:
-  - SUC-004
-  - UC-004
-  - UC-005
-  - UC-006
-  - UC-007
-  - UC-008
-  - UC-009
-  - UC-010
-  - UC-011
-  - UC-015
-  - UC-017
-  - UC-018
-  - UC-019
+- SUC-004
+- UC-004
+- UC-005
+- UC-006
+- UC-007
+- UC-008
+- UC-009
+- UC-010
+- UC-011
+- UC-015
+- UC-017
+- UC-018
+- UC-019
 depends-on:
-  - '001-007'
+- 001-007
 ---
 
 # Ticket 008: Session typed methods (~40 snake_case wrappers)
@@ -39,79 +39,79 @@ All methods listed below must exist on `Session` with the correct signatures. By
 assertions using FakeHub are the primary acceptance test for each group.
 
 **System commands:**
-- [ ] `keep_alive(dest: int) -> None` — `KeepAlive` (0x7F04), ACK
-- [ ] `fail_safe(dest: int) -> None` — `FailSafe` (0x7F05), ACK
-- [ ] `query_interface(dest: int, name: str) -> tuple[int, int]` — returns `(packet_id, num_values)`; stores `self.deka_base = packet_id`
-- [ ] `get_module_status(dest: int, clear: bool = False) -> ModuleStatus` — decodes status bytes
-- [ ] `set_module_led_color(dest: int, r: int, g: int, b: int) -> None`
-- [ ] `read_version_string(dest: int) -> str` — decodes `length` + bytes
+- [x] `keep_alive(dest: int) -> None` — `KeepAlive` (0x7F04), ACK
+- [x] `fail_safe(dest: int) -> None` — `FailSafe` (0x7F05), ACK
+- [x] `query_interface(dest: int, name: str) -> tuple[int, int]` — returns `(packet_id, num_values)`; stores `self.deka_base = packet_id`
+- [x] `get_module_status(dest: int, clear: bool = False) -> ModuleStatus` — decodes status bytes
+- [x] `set_module_led_color(dest: int, r: int, g: int, b: int) -> None`
+- [x] `read_version_string(dest: int) -> str` — decodes `length` + bytes
 
 **Motor commands (DEKA 0x08–0x18):**
-- [ ] `set_motor_channel_mode(dest, channel, mode: MotorMode, float_at_zero: bool) -> None`
-- [ ] `get_motor_channel_mode(dest, channel) -> tuple[MotorMode, bool]`
-- [ ] `set_motor_channel_enable(dest, channel, enabled: bool) -> None`
-- [ ] `get_motor_channel_enable(dest, channel) -> bool`
-- [ ] `set_motor_channel_current_alert_level(dest, channel, limit_ma: int) -> None`
-- [ ] `get_motor_channel_current_alert_level(dest, channel) -> int`
-- [ ] `reset_motor_encoder(dest, channel) -> None`
-- [ ] `set_motor_constant_power(dest, channel, power: int) -> None` — power ∈ [−32767, 32767]
-- [ ] `get_motor_constant_power(dest, channel) -> int`
-- [ ] `set_motor_target_velocity(dest, channel, velocity: int) -> None`
-- [ ] `get_motor_target_velocity(dest, channel) -> int`
-- [ ] `set_motor_target_position(dest, channel, position: int, tolerance: int) -> None`
-- [ ] `get_motor_target_position(dest, channel) -> tuple[int, int]`
-- [ ] `get_motor_at_target(dest, channel) -> bool`
-- [ ] `get_motor_encoder_position(dest, channel) -> int` — signed-32
-- [ ] `set_motor_pid_coefficients(dest, channel, mode: int, p: float, i: float, d: float) -> None` — Q16 encode
-- [ ] `get_motor_pid_coefficients(dest, channel, mode: int) -> tuple[float, float, float]` — Q16 decode
+- [x] `set_motor_channel_mode(dest, channel, mode: MotorMode, float_at_zero: bool) -> None`
+- [x] `get_motor_channel_mode(dest, channel) -> tuple[MotorMode, bool]`
+- [x] `set_motor_channel_enable(dest, channel, enabled: bool) -> None`
+- [x] `get_motor_channel_enable(dest, channel) -> bool`
+- [x] `set_motor_channel_current_alert_level(dest, channel, limit_ma: int) -> None`
+- [x] `get_motor_channel_current_alert_level(dest, channel) -> int`
+- [x] `reset_motor_encoder(dest, channel) -> None`
+- [x] `set_motor_constant_power(dest, channel, power: int) -> None` — power ∈ [−32767, 32767]
+- [x] `get_motor_constant_power(dest, channel) -> int`
+- [x] `set_motor_target_velocity(dest, channel, velocity: int) -> None`
+- [x] `get_motor_target_velocity(dest, channel) -> int`
+- [x] `set_motor_target_position(dest, channel, position: int, tolerance: int) -> None`
+- [x] `get_motor_target_position(dest, channel) -> tuple[int, int]`
+- [x] `get_motor_at_target(dest, channel) -> bool`
+- [x] `get_motor_encoder_position(dest, channel) -> int` — signed-32
+- [x] `set_motor_pid_coefficients(dest, channel, mode: int, p: float, i: float, d: float) -> None` — Q16 encode
+- [x] `get_motor_pid_coefficients(dest, channel, mode: int) -> tuple[float, float, float]` — Q16 decode
 
 **Servo commands (DEKA 0x1F–0x24):**
-- [ ] `set_servo_configuration(dest, channel, frame_period: int) -> None`
-- [ ] `get_servo_configuration(dest, channel) -> int`
-- [ ] `set_servo_pulse_width(dest, channel, pulse_width: int) -> None`
-- [ ] `get_servo_pulse_width(dest, channel) -> int`
-- [ ] `set_servo_enable(dest, channel, enabled: bool) -> None`
-- [ ] `get_servo_enable(dest, channel) -> bool`
+- [x] `set_servo_configuration(dest, channel, frame_period: int) -> None`
+- [x] `get_servo_configuration(dest, channel) -> int`
+- [x] `set_servo_pulse_width(dest, channel, pulse_width: int) -> None`
+- [x] `get_servo_pulse_width(dest, channel) -> int`
+- [x] `set_servo_enable(dest, channel, enabled: bool) -> None`
+- [x] `get_servo_enable(dest, channel) -> bool`
 
 **PWM commands (DEKA 0x19–0x1E):**
-- [ ] `set_pwm_configuration(dest, channel, frame_period: int) -> None`
-- [ ] `get_pwm_configuration(dest, channel) -> int`
-- [ ] `set_pwm_pulse_width(dest, channel, pulse_width: int) -> None`
-- [ ] `get_pwm_pulse_width(dest, channel) -> int` — 2-byte response (P7-g fix)
-- [ ] `set_pwm_enable(dest, channel, enabled: bool) -> None`
-- [ ] `get_pwm_enable(dest, channel) -> bool`
+- [x] `set_pwm_configuration(dest, channel, frame_period: int) -> None`
+- [x] `get_pwm_configuration(dest, channel) -> int`
+- [x] `set_pwm_pulse_width(dest, channel, pulse_width: int) -> None`
+- [x] `get_pwm_pulse_width(dest, channel) -> int` — 2-byte response (P7-g fix)
+- [x] `set_pwm_enable(dest, channel, enabled: bool) -> None`
+- [x] `get_pwm_enable(dest, channel) -> bool`
 
 **DIO commands (DEKA 0x01–0x06):**
-- [ ] `set_dio_direction(dest, pin, output: bool) -> None`
-- [ ] `get_dio_direction(dest, pin) -> bool` — returns value (P7-b fix)
-- [ ] `set_single_dio_output(dest, pin, value: bool) -> None`
-- [ ] `get_single_dio_input(dest, pin) -> bool`
-- [ ] `set_all_dio_outputs(dest, mask: int) -> None`
-- [ ] `get_all_dio_inputs(dest) -> int`
+- [x] `set_dio_direction(dest, pin, output: bool) -> None`
+- [x] `get_dio_direction(dest, pin) -> bool` — returns value (P7-b fix)
+- [x] `set_single_dio_output(dest, pin, value: bool) -> None`
+- [x] `get_single_dio_input(dest, pin) -> bool`
+- [x] `set_all_dio_outputs(dest, mask: int) -> None`
+- [x] `get_all_dio_inputs(dest) -> int`
 
 **ADC (DEKA 0x07):**
-- [ ] `get_adc(dest, channel: int, raw: bool = False) -> int`
+- [x] `get_adc(dest, channel: int, raw: bool = False) -> int`
 
 **I2C commands (DEKA 0x25–0x2F):**
-- [ ] `i2c_write_single_byte(dest, i2c_ch, address, byte) -> None`
-- [ ] `i2c_write_multiple_bytes(dest, i2c_ch, address, data: bytes) -> None`
-- [ ] `i2c_read_single_byte(dest, i2c_ch, address) -> None` — ACK only
-- [ ] `i2c_read_multiple_bytes(dest, i2c_ch, address, num_bytes) -> None` — ACK only
-- [ ] `i2c_read_status_query(dest, i2c_ch) -> tuple[int, bytes]` — (status, data)
-- [ ] `i2c_write_status_query(dest, i2c_ch) -> tuple[int, int]` — (status, num_bytes)
-- [ ] `i2c_configure_channel(dest, i2c_ch, speed_code: int) -> None`
-- [ ] `i2c_configure_query(dest, i2c_ch) -> int` — I2CConfigureQuery_RSP registered (P7-e fix)
+- [x] `i2c_write_single_byte(dest, i2c_ch, address, byte) -> None`
+- [x] `i2c_write_multiple_bytes(dest, i2c_ch, address, data: bytes) -> None`
+- [x] `i2c_read_single_byte(dest, i2c_ch, address) -> None` — ACK only
+- [x] `i2c_read_multiple_bytes(dest, i2c_ch, address, num_bytes) -> None` — ACK only
+- [x] `i2c_read_status_query(dest, i2c_ch) -> tuple[int, bytes]` — (status, data)
+- [x] `i2c_write_status_query(dest, i2c_ch) -> tuple[int, int]` — (status, num_bytes)
+- [x] `i2c_configure_channel(dest, i2c_ch, speed_code: int) -> None`
+- [x] `i2c_configure_query(dest, i2c_ch) -> int` — I2CConfigureQuery_RSP registered (P7-e fix)
 
 **Bulk data:**
-- [ ] `get_bulk_input_data(dest) -> BulkInputData` — calls `GetBulkInputData` (DEKA 0x00); decodes via `BulkInputData.from_response()`
+- [x] `get_bulk_input_data(dest) -> BulkInputData` — calls `GetBulkInputData` (DEKA 0x00); decodes via `BulkInputData.from_response()`
 
 **Payload byte-exact assertions (FakeHub):**
-- [ ] `set_servo_pulse_width(dest=1, channel=0, pulse_width=1500)` → payload bytes `00 DC 05`
-- [ ] `set_motor_constant_power(dest=1, channel=0, power=16000)` → payload bytes `00 80 3E`
-- [ ] `set_motor_channel_mode(dest=1, channel=0, mode=CONSTANT_POWER, float_at_zero=True)` → payload `00 00 01`
-- [ ] `get_dio_direction(dest=1, pin=3)` returns the decoded value from FakeHub response (P7-b)
-- [ ] `get_pwm_pulse_width` decodes 2-byte response correctly (P7-g)
-- [ ] `i2c_configure_query` uses the correct response id from `RESPONSES_BY_ID` (P7-e)
+- [x] `set_servo_pulse_width(dest=1, channel=0, pulse_width=1500)` → payload bytes `00 DC 05`
+- [x] `set_motor_constant_power(dest=1, channel=0, power=16000)` → payload bytes `00 80 3E`
+- [x] `set_motor_channel_mode(dest=1, channel=0, mode=CONSTANT_POWER, float_at_zero=True)` → payload `00 00 01`
+- [x] `get_dio_direction(dest=1, pin=3)` returns the decoded value from FakeHub response (P7-b)
+- [x] `get_pwm_pulse_width` decodes 2-byte response correctly (P7-g)
+- [x] `i2c_configure_query` uses the correct response id from `RESPONSES_BY_ID` (P7-e)
 
 ## Implementation Plan
 

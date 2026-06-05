@@ -1352,7 +1352,7 @@
       "payload_bytes": 1,
       "reply": {
         "kind": "response",
-        "command": null,
+        "command": "I2CConfigureQuery_RSP",
         "id": 36911,
         "id_hex": "0x902F"
       }
@@ -2462,11 +2462,13 @@
       "payload": [
         {
           "name": "pulseWidth",
-          "bytes": 1,
-          "offset": 0
+          "bytes": 2,
+          "offset": 0,
+          "unit": "us",
+          "description": "P7-g fix: response is 2 bytes, not 1."
         }
       ],
-      "payload_bytes": 1
+      "payload_bytes": 2
     },
     {
       "name": "GetPWMEnable_RSP",
@@ -2579,6 +2581,22 @@
           "name": "enable",
           "bytes": 1,
           "offset": 0
+        }
+      ],
+      "payload_bytes": 1
+    },
+    {
+      "name": "I2CConfigureQuery_RSP",
+      "id": 36911,
+      "id_hex": "0x902F",
+      "group": "response",
+      "payload": [
+        {
+          "name": "speedCode",
+          "bytes": 1,
+          "offset": 0,
+          "enum": "I2CSpeedCode",
+          "description": "P7-e fix: I2CConfigureQuery_RSP registered in RESPONSES_BY_ID."
         }
       ],
       "payload_bytes": 1

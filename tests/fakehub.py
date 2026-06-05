@@ -93,6 +93,9 @@ class FakeHub:
         # NACK overrides: command_name → nack_code.
         self._nack_config: dict[str, int] = {}
 
+        # RSP overrides: command_name → field-value dict for the response.
+        self._rsp_config: dict[str, dict] = {}
+
         # Background thread state.
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -100,6 +103,22 @@ class FakeHub:
     # ------------------------------------------------------------------
     # Public configuration API
     # ------------------------------------------------------------------
+
+    def set_rsp(self, command_name: str, **fields: object) -> None:
+        """Configure a typed RSP reply for the next transaction of *command_name*.
+
+        When FakeHub receives a frame matching *command_name*, it looks up
+        the expected RSP descriptor from ``COMMANDS[command_name].reply_id``
+        and encodes *fields* into a correctly-framed RSP packet.
+
+        Parameters
+        ----------
+        command_name:
+            The catalogue command name (e.g. ``"GetADC"``).
+        **fields:
+            Keyword arguments matching the RSP's payload fields.
+        """
+        self._rsp_config[command_name] = dict(fields)
 
     def set_nack(self, command_name: str, nack_code: int) -> None:
         """Configure a NACK reply for the next transaction of *command_name*.
@@ -219,6 +238,12 @@ class FakeHub:
             self._inject_nack(pkt, nack_code)
             return
 
+        # Check for a configured RSP override.
+        if cmd_name and cmd_name in self._rsp_config:
+            fields = self._rsp_config.pop(cmd_name)
+            self._reply_rsp(pkt, cmd_name, fields)
+            return
+
         # Dispatch to the per-type handler.
         if pkt.packet_type == _KEEPALIVE_TYPE:
             self._reply_ack(pkt)
@@ -281,6 +306,36 @@ class FakeHub:
             msg=0,
             ref=req.msg_num,
             ptype=_DISCOVERY_RSP_TYPE,
+            payload=payload,
+        )
+        self._transport.inject(frame)
+
+    def _reply_rsp(self, req: RawPacket, cmd_name: str, fields: dict) -> None:
+        """Inject a typed RSP frame using the command's expected reply id.
+
+        Parameters
+        ----------
+        req:
+            The incoming request packet.
+        cmd_name:
+            The catalogue command name used to look up the reply descriptor.
+        fields:
+            Field values to encode into the RSP payload.
+        """
+        cmd = COMMANDS[cmd_name]
+        rsp_desc = RESPONSES_BY_ID.get(cmd.reply_id)
+        if rsp_desc is None:
+            # No response descriptor — fall back to ACK.
+            self._reply_ack(req)
+            return
+
+        payload = encode_payload(rsp_desc.fields, fields) if rsp_desc.fields else b""
+        frame = build_frame(
+            dest=req.src,
+            src=self._src_addr,
+            msg=0,
+            ref=req.msg_num,
+            ptype=cmd.reply_id,
             payload=payload,
         )
         self._transport.inject(frame)
