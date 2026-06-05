@@ -37,6 +37,9 @@ build-backend = "hatchling.build"
 # NOTE: the original package now lives under vendor/rhsp as a reference
 # implementation ("mostly works"). The new idiomatic library is being built in
 # src/rhsp; once it lands, repoint these two targets back to "src/rhsp".
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["vendor/rhsp"]
 

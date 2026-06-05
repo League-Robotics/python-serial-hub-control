@@ -1,14 +1,14 @@
 ---
-id: '001-001'
-title: Foundation — errors, enums, and packaged protocol.json
-status: open
+id: 001-001
+title: "Foundation \u2014 errors, enums, and packaged protocol.json"
+status: done
 use-cases:
-  - SUC-003
-  - SUC-009
+- SUC-003
+- SUC-009
 depends-on: []
 issue:
-  - rhsp-build-a-new-idiomatic-python-library.md
-  - rhsp-idiomatic-rewrite.md
+- rhsp-build-a-new-idiomatic-python-library.md
+- rhsp-idiomatic-rewrite.md
 ---
 
 # Ticket 001: Foundation — errors, enums, and packaged protocol.json
@@ -25,13 +25,13 @@ start.
 
 ## Acceptance Criteria
 
-- [ ] `src/rhsp/errors.py` defines the full exception hierarchy:
+- [x] `src/rhsp/errors.py` defines the full exception hierarchy:
   - `RhspError(Exception)` — base for all library errors
   - `ProtocolError(RhspError)` — framing/protocol violations
   - `ChecksumError(ProtocolError)` — bad packet checksum
   - `RhspTimeoutError(RhspError)` — transaction timed out
   - `NackError(RhspError)` — hub rejected a command; has `code: int` and `description: str` attributes
-- [ ] `src/rhsp/enums.py` defines typed enums (Python `IntEnum`/`IntFlag`) for at minimum:
+- [x] `src/rhsp/enums.py` defines typed enums (Python `IntEnum`/`IntFlag`) for at minimum:
   - `MotorMode` (CONSTANT_POWER=0, CONSTANT_VELOCITY=1, POSITION_TARGET=2, CONSTANT_CURRENT=3)
   - `ZeroPowerBehavior` (BRAKE_AT_ZERO=0, FLOAT_AT_ZERO=1)
   - `NackCode` (all codes from §2.12 of the spec) with a `describe()` classmethod
@@ -39,16 +39,16 @@ start.
   - `MotorStatusBits` (`IntFlag`, bits 0–7 per §2.13)
   - `ADCChannel` (channels 0–14 per §2.11)
   - `I2CSpeedCode` (standard/fast speed codes)
-- [ ] `src/rhsp/protocol.json` is a byte-for-byte copy of `docs/rhsp-protocol.json`
-- [ ] `pyproject.toml` (or equivalent packaging config) includes `src/rhsp/protocol.json`
+- [x] `src/rhsp/protocol.json` is a byte-for-byte copy of `docs/rhsp-protocol.json`
+- [x] `pyproject.toml` (or equivalent packaging config) includes `src/rhsp/protocol.json`
   as package data so it is included in the installed package and accessible via
   `importlib.resources`
-- [ ] `src/rhsp/__init__.py` exists (may be minimal at this stage; at least `from .errors import *`)
-- [ ] `src/rhsp/py.typed` exists (empty PEP 561 marker)
-- [ ] `from rhsp.errors import NackError, ChecksumError, RhspTimeoutError` succeeds
-- [ ] `from rhsp.enums import MotorMode, NackCode` succeeds
-- [ ] `NackError(50, "Motor not configured")` has `.code == 50` and `.description == "Motor not configured"`
-- [ ] `import importlib.resources; importlib.resources.files("rhsp").joinpath("protocol.json").read_bytes()` returns valid JSON
+- [x] `src/rhsp/__init__.py` exists (may be minimal at this stage; at least `from .errors import *`)
+- [x] `src/rhsp/py.typed` exists (empty PEP 561 marker)
+- [x] `from rhsp.errors import NackError, ChecksumError, RhspTimeoutError` succeeds
+- [x] `from rhsp.enums import MotorMode, NackCode` succeeds
+- [x] `NackError(50, "Motor not configured")` has `.code == 50` and `.description == "Motor not configured"`
+- [x] `import importlib.resources; importlib.resources.files("rhsp").joinpath("protocol.json").read_bytes()` returns valid JSON
 
 ## Implementation Plan
 
