@@ -1,19 +1,19 @@
 ---
-id: '001-011'
-title: Devices — Motor, Servo, DIO, ADC, I2C, BulkInputData, P7 bug fixes
-status: open
+id: 001-011
+title: "Devices \u2014 Motor, Servo, DIO, ADC, I2C, BulkInputData, P7 bug fixes"
+status: done
 use-cases:
-  - SUC-007
-  - UC-004
-  - UC-005
-  - UC-006
-  - UC-007
-  - UC-008
-  - UC-009
-  - UC-010
-  - UC-011
+- SUC-007
+- UC-004
+- UC-005
+- UC-006
+- UC-007
+- UC-008
+- UC-009
+- UC-010
+- UC-011
 depends-on:
-  - '001-010'
+- 001-010
 ---
 
 # Ticket 011: Devices — Motor, Servo, DIO, ADC, I2C, BulkInputData, P7 bug fixes
@@ -32,17 +32,17 @@ by construction (correct implementation) and by test assertion (FakeHub byte che
 
 **P7 bug fixes — all must be verified by FakeHub tests, not just inspection:**
 
-- [ ] P7-a: `I2CChannel.configure(speed)` calls `session.i2c_configure_channel(self.address, self.channel, speed)` — session reference is not dropped
-- [ ] P7-b: `DIOPin.get_direction() -> bool` returns the decoded value from `get_dio_direction()`
-- [ ] P7-c: `session.i2c_block_read_config()` and `session.imu_block_read_config()` are implemented using `transaction()` with correct field kwargs — payload fields are set, not message attributes
-- [ ] P7-d: `session.set_motor_pid_coefficients()` calls `SetMotorPIDCoefficients` (the setter), not `GetMotorPIDCoefficients` (the getter) — verified by FakeHub observing the correct packet type id
-- [ ] P7-e: `I2CConfigureQuery_RSP` is registered in `RESPONSES_BY_ID` (handled in catalogue; verify here that `session.i2c_configure_query()` decodes the response correctly)
-- [ ] P7-f: `OSC_CALIBRATE_VAL = 0xF8` in `sensors/registers.py` — verified by import assertion in `test_devices.py`
-- [ ] P7-g: `get_pwm_pulse_width()` decodes a 2-byte response field (same width as the setter's `pulseWidth` field)
+- [x] P7-a: `I2CChannel.configure(speed)` calls `session.i2c_configure_channel(self.address, self.channel, speed)` — session reference is not dropped
+- [x] P7-b: `DIOPin.get_direction() -> bool` returns the decoded value from `get_dio_direction()`
+- [x] P7-c: `session.i2c_block_read_config()` and `session.imu_block_read_config()` are implemented using `transaction()` with correct field kwargs — payload fields are set, not message attributes
+- [x] P7-d: `session.set_motor_pid_coefficients()` calls `SetMotorPIDCoefficients` (the setter), not `GetMotorPIDCoefficients` (the getter) — verified by FakeHub observing the correct packet type id
+- [x] P7-e: `I2CConfigureQuery_RSP` is registered in `RESPONSES_BY_ID` (handled in catalogue; verify here that `session.i2c_configure_query()` decodes the response correctly)
+- [x] P7-f: `OSC_CALIBRATE_VAL = 0xF8` in `sensors/registers.py` — verified by import assertion in `test_devices.py`
+- [x] P7-g: `get_pwm_pulse_width()` decodes a 2-byte response field (same width as the setter's `pulseWidth` field)
 
 **Device class contracts:**
 
-- [ ] `Motor(session: Session, channel: int, dest: int)`:
+- [x] `Motor(session: Session, channel: int, dest: int)`:
   - `enable()` → `set_motor_channel_enable(dest, channel, True)`
   - `disable()` → `set_motor_channel_enable(dest, channel, False)`
   - `set_power(power: int) -> None` — `set_motor_constant_power`
@@ -54,37 +54,37 @@ by construction (correct implementation) and by test assertion (FakeHub byte che
   - `reset_encoder() -> None`
   - `get_velocity(hub_bulk: BulkInputData) -> int` — reads from passed-in BulkInputData, NOT a separate transaction; specifically does NOT call GetBulkMotorData (0x37)
 
-- [ ] `Servo(session, channel, dest)`:
+- [x] `Servo(session, channel, dest)`:
   - `enable()`, `disable()`
   - `set_pulse_width(pw: int) -> None` — raises `ValueError` if pw not in [500, 2500]
   - `set_angle(degrees: float) -> None` — converts: `500 + degrees * 2000 / 180`
   - `set_configuration(frame_period: int) -> None`
 
-- [ ] `DIOPin(session, pin, dest)`:
+- [x] `DIOPin(session, pin, dest)`:
   - `set_direction(output: bool) -> None`
   - `get_direction() -> bool` — returns value (P7-b)
   - `write(value: bool) -> None`
   - `read() -> bool`
 
-- [ ] `ADCPin(session, channel, dest)`:
+- [x] `ADCPin(session, channel, dest)`:
   - `read(raw: bool = False) -> int`
 
-- [ ] `I2CChannel(session, channel, dest)`:
+- [x] `I2CChannel(session, channel, dest)`:
   - `configure(speed_code: int) -> None` — passes session correctly (P7-a)
   - `device(address: int) -> I2CDevice`
 
-- [ ] `I2CDevice(session, i2c_channel, dest, address)`:
+- [x] `I2CDevice(session, i2c_channel, dest, address)`:
   - `write_register(register: int, data: bytes) -> None`
   - `read_register(register: int, num_bytes: int) -> bytes` — implements the §5.8 two-phase poll; polls `i2c_read_status_query` until status ≠ NACK-41 (up to 5 polls × 1 ms)
 
-- [ ] `BulkInputData` (frozen dataclass in `devices/bulk.py`):
+- [x] `BulkInputData` (frozen dataclass in `devices/bulk.py`):
   - `motor_0_encoder` through `motor_3_encoder`: `int` (signed-32)
   - `motor_0_velocity` through `motor_3_velocity`: `int` (signed-16)
   - `analog_input_0` through `analog_input_3`: `int`
   - `battery_voltage_mv`, `servo_0_cmd` through `servo_5_cmd`, etc.
   - `from_response(d: dict) -> BulkInputData` — reinterprets encoder/velocity as signed; handles `mototonicTime` typo
 
-- [ ] `ModuleStatus` (frozen dataclass in `devices/bulk.py`):
+- [x] `ModuleStatus` (frozen dataclass in `devices/bulk.py`):
   - `keep_alive_timeout: bool`, `device_reset: bool`, `fail_safe: bool`,
     `controller_over_temp: bool`, `battery_low: bool`, `hib_fault: bool`
   - `motor_0_lost_encoder: bool` through `motor_3_lost_encoder: bool`
@@ -93,12 +93,12 @@ by construction (correct implementation) and by test assertion (FakeHub byte che
 
 **FakeHub payload byte assertions (extends test_devices.py):**
 
-- [ ] `motor.set_power(16000)` → FakeHub payload bytes `00 80 3E`
-- [ ] `servo.set_pulse_width(1500)` → FakeHub payload bytes `00 DC 05`
-- [ ] `dio.get_direction()` returns `True` when FakeHub encodes `directionOutput=1`
-- [ ] `session.set_motor_pid_coefficients(dest, 0, 0, p=1.5, i=0.0, d=0.0)` → FakeHub receives SetMotorPIDCoefficients packet type (not GetMotorPIDCoefficients)
-- [ ] `BulkInputData.from_response()` correctly decodes negative encoder value (e.g. −1 as 0xFFFFFFFF)
-- [ ] `I2CDevice.read_register()` issues write-then-poll sequence; FakeHub records write + status query
+- [x] `motor.set_power(16000)` → FakeHub payload bytes `00 80 3E`
+- [x] `servo.set_pulse_width(1500)` → FakeHub payload bytes `00 DC 05`
+- [x] `dio.get_direction()` returns `True` when FakeHub encodes `directionOutput=1`
+- [x] `session.set_motor_pid_coefficients(dest, 0, 0, p=1.5, i=0.0, d=0.0)` → FakeHub receives SetMotorPIDCoefficients packet type (not GetMotorPIDCoefficients)
+- [x] `BulkInputData.from_response()` correctly decodes negative encoder value (e.g. −1 as 0xFFFFFFFF)
+- [x] `I2CDevice.read_register()` issues write-then-poll sequence; FakeHub records write + status query
 
 ## Implementation Plan
 

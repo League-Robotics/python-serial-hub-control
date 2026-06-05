@@ -1144,17 +1144,69 @@ class Session:
     def get_bulk_input_data(self, dest: int) -> "BulkInputData":
         """Read all digital/analog/motor/servo/I2C state in one transaction.
 
+        Some hub firmware versions return a shortened payload (e.g. 34 bytes
+        instead of the full 141 bytes in the current spec).  This method
+        zero-pads the raw payload to the expected length before decoding, so
+        older firmware hubs return partial data (with zeros for missing fields)
+        rather than raising a ``ValueError``.
+
         Parameters:
             dest: Destination module address.
 
         Returns:
             A :class:`~rhsp.devices.bulk.BulkInputData` instance with all
-            fields decoded to proper Python types.
+            fields decoded to proper Python types.  Fields not present in the
+            hub response are zero.
         """
         from rhsp.devices.bulk import BulkInputData
-        rsp = self.transaction("GetBulkInputData", dest=dest)
-        assert rsp is not None
-        return BulkInputData.from_response(rsp)
+
+        # Compute the full expected payload length from the catalogue fields.
+        rsp_desc = RESPONSES_BY_ID.get(COMMANDS["GetBulkInputData"].reply_id)
+        if rsp_desc and rsp_desc.fields:
+            last_field = rsp_desc.fields[-1]
+            expected_len = last_field.offset + last_field.nbytes
+        else:
+            expected_len = 0
+
+        # Send the frame and collect the raw packet directly so we can inspect
+        # the payload length before passing it to decode_payload.
+        cmd = COMMANDS["GetBulkInputData"]
+        ptype = runtime_packet_id(cmd, self.deka_base)
+        sent_msg_num = self._msg_num
+        self._advance_msg_num()
+        frame = build_frame(dest, 0, sent_msg_num, 0, ptype, b"")
+
+        last_exc: Exception = RhspTimeoutError(
+            f"No response for 'GetBulkInputData' after {self._retries + 1} attempt(s)"
+        )
+        for attempt in range(self._retries + 1):
+            self._transport.write(frame)
+            try:
+                pkt = self._read_response(
+                    expected_reply_id=cmd.reply_id,
+                    sent_msg_num=sent_msg_num,
+                    is_discovery=False,
+                )
+            except (RhspTimeoutError, ChecksumError) as exc:
+                last_exc = exc
+                continue
+
+            if pkt.packet_type == _NACK_TYPE:
+                nack_code = _parse_nack_code(pkt)
+                raise NackError(nack_code, NackCode.describe(nack_code))
+
+            # Pad truncated payload so decode_payload does not raise.
+            raw_payload = pkt.payload
+            if expected_len > 0 and len(raw_payload) < expected_len:
+                raw_payload = raw_payload + b"\x00" * (expected_len - len(raw_payload))
+
+            if rsp_desc is None or not rsp_desc.fields:
+                rsp: dict = {}
+            else:
+                rsp = decode_payload(rsp_desc.fields, raw_payload)
+            return BulkInputData.from_response(rsp)
+
+        raise last_exc
 
     # ------------------------------------------------------------------
     # Internal helpers
