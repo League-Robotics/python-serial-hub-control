@@ -1,14 +1,14 @@
 ---
-id: '001-009'
-title: Discovery — enumerate_hubs, connect, drained discover, QueryInterface
-status: open
+id: 001-009
+title: "Discovery \u2014 enumerate_hubs, connect, drained discover, QueryInterface"
+status: done
 use-cases:
-  - SUC-005
-  - UC-001
-  - UC-002
-  - UC-003
+- SUC-005
+- UC-001
+- UC-002
+- UC-003
 depends-on:
-  - '001-008'
+- 001-008
 ---
 
 # Ticket 009: Discovery — enumerate_hubs, connect, drained discover, QueryInterface
@@ -25,31 +25,31 @@ responses — it must not use a hard `time.sleep(2)`.
 
 ## Acceptance Criteria
 
-- [ ] `enumerate_hubs() -> list[str]`:
+- [x] `enumerate_hubs() -> list[str]`:
   - Scans available serial ports using `serial.tools.list_ports`
   - Returns port names (e.g. `/dev/ttyACM0`) whose USB serial number field starts with `"D"`
   - Returns an empty list if no matching port is found
   - No hub connection is made
-- [ ] `connect(port: str | None = None) -> Hub`:
+- [x] `connect(port: str | None = None) -> Hub`:
   - If `port is None`: calls `enumerate_hubs()` and selects the first result; raises `RhspError("No hub found")` if empty
   - Opens `SerialTransport(port, baud=460800)`
   - Creates `Session(transport)`
   - Calls `discover(dest=0xFF)` to collect all `Discovery_RSP` replies
   - Calls `session.query_interface(parent_address, "DEKA")` to obtain and store `deka_base`
   - Constructs and returns the parent `Hub` object; child hubs are accessible from the parent
-- [ ] `discover(session: Session, dest: int = 0xFF) -> list[RawPacket]`:
+- [x] `discover(session: Session, dest: int = 0xFF) -> list[RawPacket]`:
   - Sends `Discovery` (0x7F0F) to `dest`
   - Reads replies until a quiet window (~50 ms of no new bytes)
   - Returns all `Discovery_RSP` packets received
   - No `time.sleep(2)` or equivalent fixed delay
   - Exempt from `ref_num` correlation (multi-reply broadcast)
-- [ ] FakeHub test: `connect()` using a FakeHub-backed LoopbackTransport:
+- [x] FakeHub test: `connect()` using a FakeHub-backed LoopbackTransport:
   - `enumerate_hubs()` is not called (port is passed explicitly)
   - Discovery returns 1 reply → 1 Hub constructed
   - `session.deka_base == 0x1000` after `QueryInterface`
-- [ ] FakeHub test: FakeHub sends 2 Discovery_RSP replies → `connect()` returns parent Hub; second hub address is discoverable
-- [ ] `connect(None)` raises `RhspError("No hub found")` when `enumerate_hubs()` returns `[]`
-- [ ] `discover()` does not use `time.sleep()` with argument ≥ 0.1
+- [x] FakeHub test: FakeHub sends 2 Discovery_RSP replies → `connect()` returns parent Hub; second hub address is discoverable
+- [x] `connect(None)` raises `RhspError("No hub found")` when `enumerate_hubs()` returns `[]`
+- [x] `discover()` does not use `time.sleep()` with argument ≥ 0.1
 
 ## Implementation Plan
 

@@ -1,8 +1,10 @@
 """rhsp — Pure-Python driver for the REV Robotics Hub serial protocol (RHSP / DEKA).
 
-Foundation exports: error and enum types are available here.  Higher-level
-objects (``connect``, ``Hub``, ``enumerate_hubs``) will be added by later
-tickets as the rest of the library is implemented.
+Public API surface:
+- ``connect(port=None, ...) -> Hub``: open a hub connection.
+- ``enumerate_hubs() -> list[str]``: list available REV Hub serial ports.
+- ``Hub``: the connected hub object.
+- Error and enum types.
 """
 
 from .errors import (  # noqa: F401
@@ -24,8 +26,14 @@ from .enums import (  # noqa: F401
     NackCode,
     ZeroPowerBehavior,
 )
+from .hub import Hub  # noqa: F401
+from .discovery import connect, enumerate_hubs  # noqa: F401
 
 __all__ = [
+    # discovery / connection
+    "connect",
+    "enumerate_hubs",
+    "Hub",
     # errors
     "RhspError",
     "ProtocolError",
