@@ -349,16 +349,18 @@ class TestDistance2m:
     def _setup_full_init_responses(self, hub: FakeHub) -> None:
         """Configure FakeHub to respond to all reads in the VL53L0X init sequence.
 
-        Read sequence in ``Distance2m.initialize()``:
-          1  - _read1(0x91)                 stop_variable
-          2  - _read1(MSRC_CONFIG_CONTROL)  | 0x12
+        Read sequence (presence check first, then ``Distance2m.initialize()``):
+          1  - presence check: _dev.read_register(0xC0, 1) → 0xEE (model id)
+          In initialize():
+          2  - _read1(0x91)                 stop_variable
+          3  - _read1(MSRC_CONFIG_CONTROL)  | 0x12
           In _get_spad_info():
-          3  - _read1(0x83)                 | 4   (first)
-          4  - _read1(0x92)                 spad_count
-          5  - _read1(0x83)                 & ~4  (second)
+          4  - _read1(0x83)                 | 4   (first)
+          5  - _read1(0x92)                 spad_count
+          6  - _read1(0x83)                 & ~4  (second)
           Back in initialize():
-          6  - read_register(GLOBAL_CONFIG_SPAD_ENABLES_REF_0, 6)  6-byte SPAD map
-          7  - _read1(GPIO_HV_MUX_ACTIVE_HIGH)                      & ~0x10
+          7  - read_register(GLOBAL_CONFIG_SPAD_ENABLES_REF_0, 6)  6-byte SPAD map
+          8  - _read1(GPIO_HV_MUX_ACTIVE_HIGH)                      & ~0x10
         """
         read_count = [0]
         original_handle = hub._handle
@@ -371,13 +373,16 @@ class TestDistance2m:
             if cname == "I2CReadStatusQuery":
                 read_count[0] += 1
                 n = read_count[0]
-                if n == 4:
+                if n == 1:
+                    # Presence check: register 0xC0 → VL53L0X model id 0xEE
+                    data = bytes([0xEE])
+                elif n == 5:
                     # spad_count = 5, non-aperture type (bit7 = 0)
                     data = bytes([0x05])
-                elif n == 6:
+                elif n == 7:
                     # SPAD reference enable map — 6 bytes
                     data = bytes([0xFF, 0x00, 0x00, 0x00, 0x00, 0x00])
-                elif n == 7:
+                elif n == 8:
                     # GPIO_HV_MUX_ACTIVE_HIGH — return 0x10 so & ~0x10 = 0x00
                     data = bytes([0x10])
                 else:
@@ -447,10 +452,10 @@ class TestDistance2m:
         read_count = [0]
         original_handle = hub._handle
 
-        # Init has 7 reads (see _setup_full_init_responses for breakdown).
+        # Init has 8 reads (see _setup_full_init_responses for breakdown).
         # read_mm then issues:
-        #   read 8: RESULT_INTERRUPT_STATUS → 0x07 (ready)
-        #   read 9: RESULT_RANGE_STATUS+10  → 450 mm big-endian (0x01C2)
+        #   read 9:  RESULT_INTERRUPT_STATUS → 0x07 (ready)
+        #   read 10: RESULT_RANGE_STATUS+10  → 450 mm big-endian (0x01C2)
 
         def _patched_handle(pkt: Any) -> None:
             from rhsp.catalogue import COMMANDS as CMDS
@@ -460,16 +465,18 @@ class TestDistance2m:
             if cname == "I2CReadStatusQuery":
                 read_count[0] += 1
                 n = read_count[0]
-                if n == 4:
+                if n == 1:
+                    data = bytes([0xEE])  # presence check: model id
+                elif n == 5:
                     data = bytes([0x05])  # spad_count
-                elif n == 6:
-                    data = bytes([0xFF, 0x00, 0x00, 0x00, 0x00, 0x00])  # SPAD map
                 elif n == 7:
-                    data = bytes([0x10])  # GPIO_HV_MUX_ACTIVE_HIGH
+                    data = bytes([0xFF, 0x00, 0x00, 0x00, 0x00, 0x00])  # SPAD map
                 elif n == 8:
+                    data = bytes([0x10])  # GPIO_HV_MUX_ACTIVE_HIGH
+                elif n == 9:
                     # RESULT_INTERRUPT_STATUS = 0x07 (new sample ready)
                     data = bytes([0x07])
-                elif n == 9:
+                elif n == 10:
                     # Range result at RESULT_RANGE_STATUS+10 = 450 mm big-endian
                     data = bytes([0x01, 0xC2])  # 0x01C2 = 450
                 else:

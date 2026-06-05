@@ -73,6 +73,16 @@ class Distance2m:
         self._spad_count: int = 0
         self._spad_type_is_aperture: bool = False
         self._io_timeout: int = 0
+        # One read to verify the device is present before the 80-step ST init.
+        # When the I2C channel has SDA stuck, each operation causes a hub-side
+        # I2C timeout; catching it here avoids 80× that delay.
+        model_id = self._dev.read_register(0xC0, 1)[0]
+        if model_id != 0xEE:
+            from rhsp.errors import ProtocolError
+            raise ProtocolError(
+                f"VL53L0X not present: expected model id 0xEE at reg 0xC0, "
+                f"got 0x{model_id:02X}"
+            )
         self.initialize()
 
     # ------------------------------------------------------------------
