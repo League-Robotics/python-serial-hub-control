@@ -1,12 +1,12 @@
 ---
-id: '001-004'
-title: Catalogue — JSON-to-tables loader, legacy tagging, runtime_packet_id
-status: open
+id: 001-004
+title: "Catalogue \u2014 JSON-to-tables loader, legacy tagging, runtime_packet_id"
+status: done
 use-cases:
-  - SUC-003
+- SUC-003
 depends-on:
-  - '001-002'
-  - '001-003'
+- 001-002
+- 001-003
 ---
 
 # Ticket 004: Catalogue — JSON-to-tables loader, legacy tagging, runtime_packet_id
@@ -25,18 +25,18 @@ fully typed descriptor without reading JSON itself.
 
 ## Acceptance Criteria
 
-- [ ] `catalogue.COMMANDS: dict[str, Command]` has exactly 72 entries (one per JSON command)
-- [ ] `catalogue.RESPONSES_BY_ID: dict[int, Response]` has exactly 38 entries
-- [ ] `COMMANDS["GetBulkMotorData"].legacy is True` (DEKA group, index 0x37 ≥ 0x31)
-- [ ] `COMMANDS["GetBulkInputData"].legacy is False` (DEKA group, index 0x00 < 0x31)
-- [ ] `COMMANDS["KeepAlive"].legacy is False` (system group — legacy rule only applies to DEKA group)
-- [ ] `COMMANDS["SetMotorPIDCoefficients"].fields` contains a `Field` with `fixed_point=65536` (Q16)
-- [ ] `COMMANDS["SetMotorConstantPower"].fields` contains a `Field` with `signed=True` for `powerLevel`
-- [ ] `runtime_packet_id(COMMANDS["SetMotorConstantPower"], deka_base=0x1000)` returns `0x100F`
-- [ ] `runtime_packet_id(COMMANDS["KeepAlive"], deka_base=0x1000)` returns `0x7F04` (system command, not DEKA)
-- [ ] `catalogue.py` imports only `importlib.resources`, `json`, and `rhsp.codec`; never reads files elsewhere
-- [ ] Module import is idempotent (tables built once at import time, not per call)
-- [ ] Full codec round-trip test against all 72 commands and 38 responses passes
+- [x] `catalogue.COMMANDS: dict[str, Command]` has exactly 72 entries (one per JSON command)
+- [x] `catalogue.RESPONSES_BY_ID: dict[int, Response]` has exactly 38 entries
+- [x] `COMMANDS["GetBulkMotorData"].legacy is True` (DEKA group, index 0x37 ≥ 0x31)
+- [x] `COMMANDS["GetBulkInputData"].legacy is False` (DEKA group, index 0x00 < 0x31)
+- [x] `COMMANDS["KeepAlive"].legacy is False` (system group — legacy rule only applies to DEKA group)
+- [x] `COMMANDS["SetMotorPIDCoefficients"].fields` contains a `Field` with `fixed_point=65536` (Q16)
+- [x] `COMMANDS["SetMotorConstantPower"].fields` contains a `Field` with `signed=True` for `powerLevel`
+- [x] `runtime_packet_id(COMMANDS["SetMotorConstantPower"], deka_base=0x1000)` returns `0x100F`
+- [x] `runtime_packet_id(COMMANDS["KeepAlive"], deka_base=0x1000)` returns `0x7F04` (system command, not DEKA)
+- [x] `catalogue.py` imports only `importlib.resources`, `json`, and `rhsp.codec`; never reads files elsewhere
+- [x] Module import is idempotent (tables built once at import time, not per call)
+- [x] Full codec round-trip test against all 72 commands and 38 responses passes
   (Extend `tests/test_codec.py`: for each entry in `COMMANDS` and `RESPONSES_BY_ID`,
   build a sample values dict with field-appropriate min/max/zero values, encode, decode,
   assert equality)
