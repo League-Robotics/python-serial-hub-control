@@ -120,6 +120,7 @@ def main() -> None:
     with rhsp.connect(ports[0]) as hub:
         print(f"connected: {hub.read_version_string()}  (address {hub.address})")
         hub.init_peripherals()
+        hub.set_led_color(0, 32, 0)  # dim green — overrides the per-packet blue flash
         colour, distance = setup_sensors(hub)
         for cycle in range(1, CYCLES + 1):
             print(f"\n===== exercise cycle {cycle}/{CYCLES} =====")
