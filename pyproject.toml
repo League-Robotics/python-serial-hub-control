@@ -38,6 +38,9 @@ build-backend = "hatchling.build"
 # is kept on disk unchanged as a reference implementation.
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]
+# The hardware-free suite under tests/ is the project gate. The decompiled
+# reference under vendor/ ships its own old-API tests; don't collect them.
+testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rhsp"]

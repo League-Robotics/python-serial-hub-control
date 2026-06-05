@@ -1,6 +1,6 @@
 ---
-sprint: "001"
-status: draft
+sprint: '001'
+status: approved
 ---
 
 # Architecture Update — Sprint 001: Build new idiomatic rhsp library

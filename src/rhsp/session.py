@@ -355,7 +355,14 @@ class Session:
         return ModuleStatus.from_response(rsp)
 
     def set_module_led_color(self, dest: int, r: int, g: int, b: int) -> None:
-        """Set the module LED colour.
+        """Set the module LED colour (``SetModuleLEDColor``, 0x7F0A).
+
+        .. note::
+            On hub firmware 1.8.2 this command is a no-op: the hub ACKs it but
+            the LED never changes and ``GetModuleLEDColor`` keeps reading
+            ``0,0,0``. Drive the LED with :meth:`set_module_led_pattern`
+            instead (a solid colour is 16 identical steps). Kept for protocol
+            completeness.
 
         Parameters:
             dest: Destination module address.
@@ -382,12 +389,17 @@ class Session:
         """
         if len(steps) != 16:
             raise ValueError(f"steps must have exactly 16 entries, got {len(steps)}")
-        # Each rgbtStep is a 4-byte little-endian field: [R, G, B, T] on the wire.
-        # Encode as int so the codec's to_bytes(4, "little") produces [R, G, B, T].
+        # Each rgbtStep is a 4-byte field whose wire order is [T, B, G, R]
+        # (duration, blue, green, red) — matching REV's firmware and the FTC SDK
+        # LynxSetModuleLEDPatternCommand. The codec serialises each field with
+        # to_bytes(4, "little"), so the int's least-significant byte goes out
+        # first: pack T in bits 0-7, B in 8-15, G in 16-23, R in 24-31.
+        # Verified on hardware (fw 1.8.2): the [R,G,B,T] order is silently
+        # ignored; [T,B,G,R] drives the LED correctly.
         fields: dict[str, int] = {}
         for i, (r, g, b, t) in enumerate(steps):
             fields[f"rgbtStep{i}"] = (
-                (r & 0xFF) | ((g & 0xFF) << 8) | ((b & 0xFF) << 16) | ((t & 0xFF) << 24)
+                (t & 0xFF) | ((b & 0xFF) << 8) | ((g & 0xFF) << 16) | ((r & 0xFF) << 24)
             )
         self.transaction("SetModuleLEDPattern", dest=dest, **fields)
 

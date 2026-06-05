@@ -425,3 +425,46 @@ class TestReturnValues:
             assert "packetID" in result or "numValues" in result or result is not None
         finally:
             hub.stop()
+
+
+# ---------------------------------------------------------------------------
+# Module LED pattern wire format
+# ---------------------------------------------------------------------------
+
+_SET_MODULE_LED_PATTERN_TYPE = 0x7F0C
+
+
+class TestModuleLEDPattern:
+    """SetModuleLEDPattern must serialise each step as [T, B, G, R] on the wire.
+
+    REV's firmware (verified on fw 1.8.2) and the FTC SDK's
+    LynxSetModuleLEDPatternCommand expect duration-first, BGR colour order.
+    The [R, G, B, T] order is silently ignored by the hub.
+    """
+
+    def test_step_wire_order_is_t_b_g_r(self) -> None:
+        transport, hub, session = _make_session(timeout=0.2)
+        hub.run_in_thread()
+        try:
+            # Distinct values per channel so a swap can't pass by coincidence.
+            r, g, b, t = 0x11, 0x22, 0x33, 0x44
+            session.set_module_led_pattern(dest=2, steps=[(r, g, b, t)] * 16)
+        finally:
+            hub.stop()
+
+        reqs = [
+            p for p in hub.requests
+            if p.packet_type == _SET_MODULE_LED_PATTERN_TYPE
+        ]
+        assert len(reqs) == 1
+        payload = reqs[0].payload
+        assert len(payload) == 64  # 16 steps × 4 bytes
+        # Every step is the same colour; check the wire order of step 0.
+        assert payload[0:4] == bytes([t, b, g, r])  # [T, B, G, R]
+        # And the whole payload is that step repeated 16×.
+        assert payload == bytes([t, b, g, r]) * 16
+
+    def test_requires_exactly_16_steps(self) -> None:
+        transport, hub, session = _make_session(timeout=0.2)
+        with pytest.raises(ValueError, match="16"):
+            session.set_module_led_pattern(dest=2, steps=[(1, 2, 3, 4)] * 15)

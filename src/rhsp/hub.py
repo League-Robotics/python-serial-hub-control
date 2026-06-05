@@ -257,9 +257,22 @@ class Hub:
     def set_led_color(self, r: int, g: int, b: int) -> None:
         """Set the module LED to a solid colour (no blinking).
 
-        Sends both ``SetModuleLEDColor`` and ``SetModuleLEDPattern`` (all 16
-        steps set to the same colour) so the hub shows a steady colour rather
-        than its default blinking animation.
+        Drives the LED via ``SetModuleLEDPattern`` (all 16 steps the same
+        colour). Two firmware quirks (verified on fw 1.8.2) make the naive
+        approach fail silently:
+
+        * ``SetModuleLEDColor`` (0x7F0A) is a no-op — it ACKs but never
+          changes the LED, so it is not used here.
+        * The LED is held in its blinking-blue *status* animation while the
+          ``KeepAliveTimeout``/``FailSafe`` flags are latched (they latch
+          during connect, before the keep-alive heartbeat is up). The hub
+          ignores LED commands until those flags are cleared, so this method
+          clears them first via ``GetModuleStatus(clear=True)``.
+
+        The colour only stays steady while a keep-alive heartbeat is running
+        (see :meth:`start_keepalive` / the context-manager form); if keep-alive
+        lapses, the firmware re-latches the timeout and reverts to blinking
+        blue.
 
         Parameters
         ----------
@@ -270,7 +283,9 @@ class Hub:
         b:
             Blue component (0–255).
         """
-        self.session.set_module_led_color(self.address, r, g, b)
+        # Drop the latched KeepAliveTimeout|FailSafe so the firmware releases
+        # the LED from its status animation to user control.
+        self.session.get_module_status(self.address, clear=True)
         solid = [(r, g, b, 1)] * 16
         self.session.set_module_led_pattern(self.address, solid)
 
