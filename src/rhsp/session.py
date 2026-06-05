@@ -1,8 +1,7 @@
 """Session — RHSP transaction engine.
 
-``Session`` is the single-threaded serialisation point between the
-application and the hub.  Exactly one transaction is outstanding at any
-time; there are no background threads.
+``Session`` is the serialisation point between the application and the
+hub.  Exactly one transaction is outstanding at any time.
 
 Usage::
 
@@ -22,12 +21,18 @@ Protocol state maintained here:
 
 Threading note
 --------------
-``Session`` is **not thread-safe**.  Use one ``Session`` per thread, or
-serialise access externally.
+``Session`` is **thread-safe for one background heartbeat thread plus one
+caller thread** via an internal :class:`threading.RLock`.  Each public
+I/O entry point (``transaction``, ``discover``, ``get_bulk_input_data``)
+holds the lock for the full duration of the operation (write + read) so
+transactions are atomic and cannot interleave on the wire.  The lock is
+a *reentrant* lock so typed convenience methods (which call
+``self.transaction`` internally) remain safe.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import TYPE_CHECKING
 
@@ -97,6 +102,9 @@ class Session:
         self.deka_base: int = 0x1000
         # Shared frame parser (reused across transactions).
         self._parser: FrameParser = FrameParser()
+        # Reentrant lock: serialises the public I/O methods so a background
+        # heartbeat thread and the caller can share the session safely.
+        self._lock: threading.RLock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -113,6 +121,9 @@ class Session:
         Looks up *command_name* in the catalogue, encodes ``**fields`` as
         the request payload, frames and sends it, then waits for the
         matching response.
+
+        Thread-safe: acquires the internal RLock for the full duration so
+        concurrent callers (e.g. a background heartbeat) are serialised.
 
         Parameters
         ----------
@@ -139,6 +150,16 @@ class Session:
         RhspTimeoutError
             If no valid response arrives within ``retries + 1`` attempts.
         """
+        with self._lock:
+            return self._transaction(command_name, dest, **fields)
+
+    def _transaction(
+        self,
+        command_name: str,
+        dest: int,
+        **fields: object,
+    ) -> dict | None:
+        """Internal transaction implementation (lock must already be held)."""
         cmd = COMMANDS[command_name]
         ptype = runtime_packet_id(cmd, self.deka_base)
         payload = encode_payload(cmd.fields, fields) if fields else (
@@ -199,6 +220,8 @@ class Session:
         address ``0xFF``) then accumulates incoming ``Discovery_RSP``
         packets until no bytes arrive for approximately 50 ms.
 
+        Thread-safe: acquires the internal RLock for the full duration.
+
         Parameters
         ----------
         dest:
@@ -216,6 +239,11 @@ class Session:
         This method is exempt from the single-outstanding-transaction
         constraint: multiple replies are collected from a broadcast.
         """
+        with self._lock:
+            return self._discover(dest)
+
+    def _discover(self, dest: int = 0xFF) -> list[RawPacket]:
+        """Internal discover implementation (lock must already be held)."""
         cmd = COMMANDS["Discovery"]
         ptype = runtime_packet_id(cmd, self.deka_base)
         payload = b""
@@ -338,6 +366,26 @@ class Session:
         self.transaction(
             "SetModuleLEDColor", dest=dest, redPower=r, greenPower=g, bluePower=b
         )
+
+    def set_module_led_pattern(
+        self, dest: int, steps: list[tuple[int, int, int, int]]
+    ) -> None:
+        """Set the 16-step LED animation pattern.
+
+        Each step is an ``(r, g, b, t)`` tuple where *t* is the step duration
+        (0–255, firmware-defined units).  To show a solid non-blinking colour,
+        pass all 16 steps with the same RGB and any non-zero *t*.
+
+        Parameters:
+            dest:  Destination module address.
+            steps: 16-element list of ``(r, g, b, t)`` tuples.
+        """
+        if len(steps) != 16:
+            raise ValueError(f"steps must have exactly 16 entries, got {len(steps)}")
+        fields: dict[str, bytes] = {}
+        for i, (r, g, b, t) in enumerate(steps):
+            fields[f"rgbtStep{i}"] = bytes([r & 0xFF, g & 0xFF, b & 0xFF, t & 0xFF])
+        self.transaction("SetModuleLEDPattern", dest=dest, **fields)
 
     def get_module_led_color(self, dest: int) -> tuple[int, int, int]:
         """Read the current module LED colour.
@@ -1150,6 +1198,8 @@ class Session:
         older firmware hubs return partial data (with zeros for missing fields)
         rather than raising a ``ValueError``.
 
+        Thread-safe: acquires the internal RLock for the full duration.
+
         Parameters:
             dest: Destination module address.
 
@@ -1158,6 +1208,11 @@ class Session:
             fields decoded to proper Python types.  Fields not present in the
             hub response are zero.
         """
+        with self._lock:
+            return self._get_bulk_input_data(dest)
+
+    def _get_bulk_input_data(self, dest: int) -> "BulkInputData":
+        """Internal bulk-input implementation (lock must already be held)."""
         from rhsp.devices.bulk import BulkInputData
 
         # Compute the full expected payload length from the catalogue fields.

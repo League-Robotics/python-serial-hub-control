@@ -255,7 +255,11 @@ class Hub:
         return self.session.get_module_status(self.address, clear)
 
     def set_led_color(self, r: int, g: int, b: int) -> None:
-        """Set the module LED colour.
+        """Set the module LED to a solid colour (no blinking).
+
+        Sends both ``SetModuleLEDColor`` and ``SetModuleLEDPattern`` (all 16
+        steps set to the same colour) so the hub shows a steady colour rather
+        than its default blinking animation.
 
         Parameters
         ----------
@@ -267,6 +271,8 @@ class Hub:
             Blue component (0–255).
         """
         self.session.set_module_led_color(self.address, r, g, b)
+        solid = [(r, g, b, 1)] * 16
+        self.session.set_module_led_pattern(self.address, solid)
 
     def read_version_string(self) -> str:
         """Read the firmware version string from this hub.
