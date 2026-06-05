@@ -34,11 +34,15 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# NOTE: the original package now lives under vendor/rhsp as a reference
+# implementation ("mostly works"). The new idiomatic library is being built in
+# src/rhsp; once it lands, repoint these two targets back to "src/rhsp".
 [tool.hatch.build.targets.wheel]
-packages = ["src/rhsp"]
+packages = ["vendor/rhsp"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+    "vendor/rhsp",
     "src/rhsp",
     "docs",
     "test",

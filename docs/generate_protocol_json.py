@@ -19,8 +19,10 @@ import json
 import os
 import sys
 
-# Make the package importable when run from the repo root.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# Make the (reference) package importable when run from the repo root.
+# The original implementation now lives under vendor/rhsp; this generator
+# introspects it until it is inverted to read the new src/rhsp catalogue.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "vendor"))
 
 import rhsp.internal.messages as M
 
