@@ -26,48 +26,103 @@ uv sync            # create .venv and install runtime deps
 uv sync --dev      # also install dev tools (pytest)
 ```
 
-Run anything inside the environment with `uv run`, e.g.:
-
-```bash
-uv run python -m rhsp           # launch the bundled interface
-uv run python test/test_serial.py
-```
-
 ## Quick start
 
 ```python
-from rhsp import Client
-from rhsp.motors import MODE_CONSTANT_VELOCITY
+import rhsp
 
-client = Client()
-client.open()                       # auto-selects the first REV hub it finds
+# Discover and connect to the first available hub.
+hubs = rhsp.enumerate_hubs()
+if not hubs:
+    raise RuntimeError("No REV Hub found — is it plugged in?")
+hub = rhsp.connect(hubs[0])
 
-for module in client.discovery():   # broadcast discovery; one Module per hub
-    print("Status:", module.getStatus())
-    module.init_periphs()           # set up motors, servos, DIO, ADC, I2C
+# Bring up peripherals (sets motor modes to CONSTANT_POWER, servo frame periods).
+hub.init_peripherals()
 
-    module.keep_alive()             # must be repeated at least every ~2.5 s
+# Keep the hub alive (call at least every 2.5 s or outputs will shut off).
+hub.keep_alive()
 
-    motor = module.motors[0]
-    motor.setMode(MODE_CONSTANT_VELOCITY, 1)
-    motor.enable()
-    motor.setTargetVelocity(1000)
+# Motor control — motor channels are 0–3.
+motor = hub.motors[0]
+motor.set_mode(rhsp.MotorMode.CONSTANT_POWER)
+motor.enable()
+motor.set_power(16000)   # range: -32767..32767
+
+# Closed-loop velocity.
+motor.set_mode(rhsp.MotorMode.CONSTANT_VELOCITY)
+motor.set_target_velocity(800)   # encoder counts / second
+bulk = hub.bulk_input()
+print("velocity:", motor.get_velocity(bulk))
+
+# Servo control — servo channels are 0–5.
+servo = hub.servos[0]
+servo.set_configuration(20_000)   # 50 Hz frame period (µs)
+servo.enable()
+servo.set_angle(90)               # 0–180 degrees
+# or direct pulse width:
+servo.set_pulse_width(1500)       # µs
+
+# Digital I/O — pins 0–7.
+dio = hub.dio[0]
+dio.set_direction(True)    # True = output
+dio.write(True)
+print("read back:", dio.read())
+
+# Shut down cleanly.
+hub.fail_safe()
 ```
 
-See [test/](test/) for runnable examples covering motors, servos, DIO, and the
-color/distance sensors. **Note:** these scripts require a physical hub attached.
+> **Breaking change from the old camelCase API**: All methods are now
+> ``snake_case`` (e.g. ``set_power`` instead of ``setPower``,
+> ``init_peripherals`` instead of ``init_periphs``).  The old `vendor/rhsp/`
+> code is kept as a reference only.
+
+## Running the examples
+
+Hardware example scripts live in `examples/`.  Each script skips cleanly when
+no hub is attached, so the full suite passes on a hardware-free machine:
+
+```bash
+uv run pytest examples/         # all skipped (no hub)
+uv run pytest examples/ -v -s   # verbose with print output (hub required)
+```
+
+Available examples:
+
+| Script                     | What it demonstrates                        |
+|----------------------------|---------------------------------------------|
+| `examples/test_motor.py`   | Power sweep + closed-loop velocity sweep    |
+| `examples/test_servo.py`   | Angle sweep 0°→180°→0°                      |
+| `examples/test_dio.py`     | Digital I/O direction, write, read-back     |
+| `examples/test_sensors.py` | Color (V3), distance (VL53L0X), IMU block   |
+
+## Running the unit tests
+
+```bash
+uv run pytest tests/   # hardware-free; uses a software fake hub
+```
 
 ## Layout
 
 ```
-src/rhsp/              the package
-  client.py            serial framing, send/receive, checksum, discovery
-  module.py            a discovered hub; owns motors/servos/DIO/ADC/I2C
-  motors.py servo.py dio.py adc.py i2c.py   per-peripheral APIs
-  color.py distance.py imu.py               I2C sensor drivers
-  rshp_serial.py       typed pyserial wrapper + USB port enumeration
-  internal/            wire-level message definitions (messages.py) and helpers
-test/                  hardware example scripts
+src/rhsp/              new idiomatic package (snake_case API, Python ≥ 3.13)
+  __init__.py          public re-exports: connect, enumerate_hubs, Hub, …
+  discovery.py         enumerate_hubs() + connect()
+  hub.py               Hub — motors, servos, DIO, ADC, I2C
+  session.py           Session — low-level transaction engine
+  devices/             Motor, Servo, DIOPin, ADCPin, I2CChannel, BulkInputData
+  sensors/             ColorSensor, ColorSensorV3, Distance2m, IMU drivers
+  transport.py         SerialTransport (pyserial wrapper)
+  framing.py           Frame parser / builder
+  codec.py             Payload encoder / decoder
+  catalogue.py         JSON-backed command catalogue
+  enums.py             MotorMode, ZeroPowerBehavior, NackCode, …
+  errors.py            RhspError, NackError, ProtocolError, …
+
+vendor/rhsp/           original camelCase code (kept as reference)
+examples/              runnable hardware examples (skip when no hub attached)
+tests/                 hardware-free pytest suite
 docs/                  protocol documentation (see below)
 ```
 

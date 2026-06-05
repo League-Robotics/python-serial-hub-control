@@ -1,13 +1,13 @@
 ---
-id: '001-013'
+id: 001-013
 title: Public API, examples, README, delete __main__.py
-status: open
+status: done
 use-cases:
-  - SUC-009
-  - UC-023
-  - UC-024
+- SUC-009
+- UC-023
+- UC-024
 depends-on:
-  - '001-012'
+- 001-012
 ---
 
 # Ticket 013: Public API, examples, README, delete __main__.py
@@ -24,25 +24,25 @@ After this ticket the library is feature-complete and testable end-to-end
 
 ## Acceptance Criteria
 
-- [ ] `src/rhsp/__init__.py` re-exports:
+- [x] `src/rhsp/__init__.py` re-exports:
   - `connect`, `enumerate_hubs` from `discovery`
   - `Hub` from `hub`
   - `RhspError`, `ProtocolError`, `ChecksumError`, `RhspTimeoutError`, `NackError` from `errors`
   - `MotorMode`, `ZeroPowerBehavior`, `NackCode`, `ModuleStatusBits`, `MotorStatusBits` from `enums`
   - `BulkInputData`, `ModuleStatus` from `devices.bulk`
   - `Session` from `session` (for advanced use)
-- [ ] `from rhsp import connect, Hub, MotorMode, NackError` succeeds
-- [ ] `src/rhsp/__main__.py` is deleted (the dead tkinter GUI)
-- [ ] `python -m rhsp` raises `ModuleNotFoundError` or a clean "no entry point" error — not a tkinter import error
-- [ ] `examples/` directory created with at minimum:
+- [x] `from rhsp import connect, Hub, MotorMode, NackError` succeeds
+- [x] `src/rhsp/__main__.py` is deleted (the dead tkinter GUI) — never existed in `src/rhsp/`; `test_no_gui_entry_point` asserts it is absent
+- [x] `python -m rhsp` raises `ModuleNotFoundError` or a clean "no entry point" error — not a tkinter import error
+- [x] `examples/` directory created with at minimum:
   - `examples/test_motor.py` — motor power + velocity sweep; skips if no hub
   - `examples/test_servo.py` — servo sweep; skips if no hub
   - `examples/test_dio.py` — DIO direction + read/write; skips if no hub
   - `examples/test_sensors.py` — color + distance + IMU read; skips if no hub
-- [ ] Each example script uses the new snake_case API (not the camelCase vendor API)
-- [ ] Each example calls `enumerate_hubs()`; if empty, raises `pytest.skip("no hub found")`
-- [ ] `uv run pytest examples/` exits 0 on a machine with no hub (all tests skipped)
-- [ ] `README.md` updated:
+- [x] Each example script uses the new snake_case API (not the camelCase vendor API)
+- [x] Each example calls `enumerate_hubs()`; if empty, raises `pytest.skip("no hub found")`
+- [x] `uv run pytest examples/` exits 0 on a machine with no hub (all tests skipped)
+- [x] `README.md` updated:
   - Removes `python -m rhsp` claim
   - Shows the new `connect()` / `hub.motors[0].set_power(16000)` usage pattern
   - Notes the breaking API change (camelCase → snake_case)
