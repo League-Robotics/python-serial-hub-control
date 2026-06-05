@@ -41,6 +41,9 @@ _SET_MOTOR_CONSTANT_POWER_TYPE: int = runtime_packet_id(
 _SET_SERVO_CONFIGURATION_TYPE: int = runtime_packet_id(
     COMMANDS["SetServoConfiguration"], _DEKA_BASE
 )
+_SET_SERVO_PULSE_WIDTH_TYPE: int = runtime_packet_id(
+    COMMANDS["SetServoPulseWidth"], _DEKA_BASE
+)
 _KEEPALIVE_TYPE: int = 0x7F04
 _FAILSAFE_TYPE: int = 0x7F05
 
@@ -164,7 +167,7 @@ class TestInitPeripherals:
     """init_peripherals() must emit motor + servo commands in exact order."""
 
     def test_command_sequence_and_count(self) -> None:
-        """4×(SetMotorChannelMode + SetMotorConstantPower) + 6×SetServoConfiguration."""
+        """4×(SetMotorChannelMode+SetMotorConstantPower) + 6×(SetServoConfiguration+SetServoPulseWidth)."""
         _, fake, hub = _make_hub()
         try:
             hub.init_peripherals()
@@ -172,14 +175,11 @@ class TestInitPeripherals:
             fake.stop()
 
         # Expected command sequence:
-        # ch 0: SetMotorChannelMode, SetMotorConstantPower
-        # ch 1: SetMotorChannelMode, SetMotorConstantPower
-        # ch 2: SetMotorChannelMode, SetMotorConstantPower
-        # ch 3: SetMotorChannelMode, SetMotorConstantPower
-        # ch 0–5: SetServoConfiguration × 6
+        # ch 0–3: SetMotorChannelMode, SetMotorConstantPower
+        # ch 0–5: SetServoConfiguration, SetServoPulseWidth(1500)
         expected_types = (
             [_SET_MOTOR_CHANNEL_MODE_TYPE, _SET_MOTOR_CONSTANT_POWER_TYPE] * 4
-            + [_SET_SERVO_CONFIGURATION_TYPE] * 6
+            + [_SET_SERVO_CONFIGURATION_TYPE, _SET_SERVO_PULSE_WIDTH_TYPE] * 6
         )
 
         actual_types = [pkt.packet_type for pkt in fake.requests]
@@ -259,7 +259,9 @@ class TestInitPeripherals:
                 return int.from_bytes(bytes(v)[:nbytes].ljust(nbytes, b"\x00"), "little")
             return int(v)  # type: ignore[arg-type]
 
-        for servo_idx, req_idx in enumerate(range(8, 14)):
+        # SetServoConfiguration is at indices 8, 10, 12, 14, 16, 18
+        # (interleaved with SetServoPulseWidth at 9, 11, 13, 15, 17, 19)
+        for servo_idx, req_idx in enumerate(range(8, 20, 2)):
             pkt = fake.requests[req_idx]
             decoded = decode_payload(cmd.fields, pkt.payload)
             assert _to_int(decoded["servoChannel"]) == servo_idx

@@ -139,6 +139,7 @@ class Hub:
 
         For each servo channel 0–5:
         - ``SetServoConfiguration(ch, 20000)``
+        - ``SetServoPulseWidth(ch, 1500)``  (center; required before Enable)
 
         If any command raises (including :exc:`~rhsp.errors.NackError`),
         ``fail_safe()`` is called on this hub and the original exception is
@@ -152,6 +153,8 @@ class Hub:
                 self.session.set_motor_constant_power(self.address, ch, 0)
             for ch in range(6):
                 self.session.set_servo_configuration(self.address, ch, 20000)
+                # Hub requires a pulse width before SetServoEnable will be accepted.
+                self.session.set_servo_pulse_width(self.address, ch, 1500)
         except Exception:
             self.session.fail_safe(self.address)
             raise
