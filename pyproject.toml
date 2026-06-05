@@ -1,6 +1,6 @@
 [project]
 name = "rhsp"
-version = "0.20260605.20"
+version = "0.20260605.21"
 description = "Pure-Python driver for the REV Robotics Expansion/Control Hub serial protocol (RHSP / DEKA interface)"
 readme = "README.md"
 authors = [

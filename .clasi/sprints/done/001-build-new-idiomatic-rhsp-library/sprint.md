@@ -1,35 +1,35 @@
 ---
 id: '001'
 title: Build new idiomatic rhsp library
-status: planning-docs
+status: done
 branch: sprint/001-build-new-idiomatic-rhsp-library
 use-cases:
-  - UC-001
-  - UC-002
-  - UC-003
-  - UC-004
-  - UC-005
-  - UC-006
-  - UC-007
-  - UC-008
-  - UC-009
-  - UC-010
-  - UC-011
-  - UC-012
-  - UC-013
-  - UC-014
-  - UC-015
-  - UC-016
-  - UC-017
-  - UC-018
-  - UC-019
-  - UC-022
-  - UC-023
-  - UC-024
-  - UC-025
+- UC-001
+- UC-002
+- UC-003
+- UC-004
+- UC-005
+- UC-006
+- UC-007
+- UC-008
+- UC-009
+- UC-010
+- UC-011
+- UC-012
+- UC-013
+- UC-014
+- UC-015
+- UC-016
+- UC-017
+- UC-018
+- UC-019
+- UC-022
+- UC-023
+- UC-024
+- UC-025
 issues:
-  - rhsp-build-a-new-idiomatic-python-library.md
-  - rhsp-idiomatic-rewrite.md
+- rhsp-build-a-new-idiomatic-python-library.md
+- rhsp-idiomatic-rewrite.md
 ---
 
 # Sprint 001: Build new idiomatic rhsp library
