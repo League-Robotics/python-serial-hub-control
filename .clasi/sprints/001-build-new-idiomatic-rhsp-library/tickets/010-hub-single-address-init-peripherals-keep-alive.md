@@ -1,14 +1,14 @@
 ---
-id: '001-010'
-title: Hub — single address, init_peripherals with rollback, keep_alive
-status: open
+id: 001-010
+title: "Hub \u2014 single address, init_peripherals with rollback, keep_alive"
+status: done
 use-cases:
-  - SUC-006
-  - UC-001
-  - UC-017
-  - UC-021
+- SUC-006
+- UC-001
+- UC-017
+- UC-021
 depends-on:
-  - '001-009'
+- 001-009
 ---
 
 # Ticket 010: Hub — single address, init_peripherals with rollback, keep_alive
@@ -26,7 +26,7 @@ and `destinationModule`. Device objects are constructed in `__init__` with just
 
 ## Acceptance Criteria
 
-- [ ] `Hub.__init__(session: Session, address: int, parent: bool = False)`:
+- [x] `Hub.__init__(session: Session, address: int, parent: bool = False)`:
   - `self.session = session`
   - `self.address = address`
   - `self.parent = parent`
@@ -36,22 +36,22 @@ and `destinationModule`. Device objects are constructed in `__init__` with just
   - `self.adc: list[ADCPin]` — 4 entries, channels 0–3
   - `self.i2c: list[I2CChannel]` — 4 entries, channels 0–3
   - Device construction is logic-free (no hub transactions in `__init__`)
-- [ ] `hub.init_peripherals() -> None`:
+- [x] `hub.init_peripherals() -> None`:
   - For each motor channel 0–3: `session.set_motor_channel_mode(addr, ch, CONSTANT_POWER, float_at_zero=True)` then `session.set_motor_constant_power(addr, ch, 0)`
   - For each servo channel 0–5: `session.set_servo_configuration(addr, ch, 20000)`
   - If any command raises, calls `session.fail_safe(addr)` then re-raises the original exception
-- [ ] `hub.keep_alive() -> None`:
+- [x] `hub.keep_alive() -> None`:
   - Calls `session.keep_alive(self.address)`
   - Docstring states the 2500 ms fail-safe deadline
-- [ ] `hub.fail_safe() -> None`:
+- [x] `hub.fail_safe() -> None`:
   - Calls `session.fail_safe(self.address)`
-- [ ] `hub.get_module_status(clear: bool = False) -> ModuleStatus`:
+- [x] `hub.get_module_status(clear: bool = False) -> ModuleStatus`:
   - Delegates to `session.get_module_status(self.address, clear)`
-- [ ] `hub.set_led_color(r, g, b) -> None` and `hub.read_version_string() -> str`
-- [ ] FakeHub test: `init_peripherals()` emits correct byte sequence for 4 motors (SetMotorChannelMode + SetMotorConstantPower × 4) and 6 servos (SetServoConfiguration × 6)
-- [ ] FakeHub test: mid-sequence `NackError` in `init_peripherals()` causes `fail_safe()` to be sent and exception re-raised
-- [ ] `hub.address` is a single int; no `module` or `destinationModule` attribute exists
-- [ ] `keep_alive()` sends `KeepAlive` (0x7F04) and receives ACK — verified via FakeHub
+- [x] `hub.set_led_color(r, g, b) -> None` and `hub.read_version_string() -> str`
+- [x] FakeHub test: `init_peripherals()` emits correct byte sequence for 4 motors (SetMotorChannelMode + SetMotorConstantPower × 4) and 6 servos (SetServoConfiguration × 6)
+- [x] FakeHub test: mid-sequence `NackError` in `init_peripherals()` causes `fail_safe()` to be sent and exception re-raised
+- [x] `hub.address` is a single int; no `module` or `destinationModule` attribute exists
+- [x] `keep_alive()` sends `KeepAlive` (0x7F04) and receives ACK — verified via FakeHub
 
 ## Implementation Plan
 
