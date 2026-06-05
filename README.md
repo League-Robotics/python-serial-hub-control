@@ -31,17 +31,13 @@ uv sync --dev      # also install dev tools (pytest)
 ```python
 import rhsp
 
-# Discover and connect to the first available hub.
+# Discover, connect, and start the automatic keep-alive heartbeat.
 hubs = rhsp.enumerate_hubs()
 if not hubs:
     raise RuntimeError("No REV Hub found — is it plugged in?")
-hub = rhsp.connect(hubs[0])
-
-# Bring up peripherals (sets motor modes to CONSTANT_POWER, servo frame periods).
-hub.init_peripherals()
-
-# Keep the hub alive (call at least every 2.5 s or outputs will shut off).
-hub.keep_alive()
+with rhsp.connect(hubs[0]) as hub:
+    # Bring up peripherals (sets motor modes to CONSTANT_POWER, servo frame periods).
+    hub.init_peripherals()
 
 # Motor control — motor channels are 0–3.
 motor = hub.motors[0]

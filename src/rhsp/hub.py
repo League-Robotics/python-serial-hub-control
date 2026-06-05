@@ -19,8 +19,12 @@ Public API
     then ``SetMotorConstantPower(ch, 0)``
   - servo channels 0–5: ``SetServoConfiguration(ch, 20000)``
   If any command raises, ``fail_safe()`` is called and the exception re-raised.
+- ``with hub:`` / ``hub.start_keepalive(interval=2.0)`` / ``hub.stop_keepalive()``:
+  Hub-managed heartbeat.  Use ``with hub:`` so the hub stays alive
+  automatically and fail-safes on exit.  ``keep_alive()`` is still
+  available for explicit one-shot pings.
 - ``hub.keep_alive() -> None``:
-  Send a KeepAlive; must be called within 2500 ms to prevent fail-safe.
+  Send a single KeepAlive packet (explicit / one-shot).
 - ``hub.fail_safe() -> None``:
   Immediately put the hub into fail-safe (all outputs disabled).
 - ``hub.get_module_status(clear=False) -> ModuleStatus``:
@@ -35,6 +39,7 @@ Public API
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 from rhsp.devices.adc import ADCPin
@@ -100,6 +105,10 @@ class Hub:
         # Populated by connect() after discovery.
         self.children: list["Hub"] = []
 
+        # Keep-alive heartbeat state.
+        self._ka_thread: threading.Thread | None = None
+        self._ka_stop: threading.Event = threading.Event()
+
         # Device lists — no hub transactions here.
         self.motors: list[Motor] = [
             Motor(session, ch, address) for ch in range(4)
@@ -152,17 +161,80 @@ class Hub:
     # ------------------------------------------------------------------
 
     def keep_alive(self) -> None:
-        """Send a KeepAlive to prevent the hub entering fail-safe.
+        """Send a single KeepAlive packet.
 
-        The hub enters fail-safe (all outputs disabled) if no valid packet
-        is received within **2500 ms**.  Call this method at least that
-        frequently to keep the hub active.
+        The hub disables all outputs if no valid packet arrives within
+        **2500 ms**.  Prefer :meth:`start_keepalive` (or ``with hub:``) so
+        the heartbeat runs automatically; call this only when you need an
+        explicit one-shot ping.
         """
         self.session.keep_alive(dest=self.address)
+
+    def start_keepalive(self, interval: float = 2.0) -> None:
+        """Start a background heartbeat thread that sends KeepAlive packets.
+
+        The hub disables all outputs if no valid packet arrives within
+        2500 ms.  This method launches a daemon thread that calls
+        :meth:`keep_alive` every *interval* seconds, so user code never
+        needs to call it manually.
+
+        The preferred idiom is to use ``Hub`` as a context manager::
+
+            with rhsp.connect(port) as hub:
+                hub.init_peripherals()
+                hub.motors[0].set_power(16000)
+                time.sleep(2)   # heartbeat fires automatically
+
+        Parameters
+        ----------
+        interval:
+            Seconds between heartbeats.  Must be less than 2.5 s.
+            Defaults to 2.0 s.
+        """
+        if interval >= 2.5:
+            raise ValueError("interval must be < 2.5 s (hub fail-safe timeout)")
+        if self._ka_thread is not None and self._ka_thread.is_alive():
+            return  # already running
+
+        self._ka_stop.clear()
+
+        def _loop() -> None:
+            while not self._ka_stop.wait(timeout=interval):
+                try:
+                    self.keep_alive()
+                except Exception:
+                    pass  # transient error — keep trying
+
+        self._ka_thread = threading.Thread(target=_loop, daemon=True, name="rhsp-keepalive")
+        self._ka_thread.start()
+
+    def stop_keepalive(self) -> None:
+        """Stop the background heartbeat thread (if running)."""
+        self._ka_stop.set()
+        if self._ka_thread is not None:
+            self._ka_thread.join(timeout=1.0)
+            self._ka_thread = None
 
     def fail_safe(self) -> None:
         """Immediately put this hub into fail-safe (all outputs disabled)."""
         self.session.fail_safe(self.address)
+
+    # ------------------------------------------------------------------
+    # Context manager — starts heartbeat on enter, stops + fail-safes on exit
+    # ------------------------------------------------------------------
+
+    def __enter__(self) -> "Hub":
+        """Start the keep-alive heartbeat."""
+        self.start_keepalive()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        """Stop the heartbeat and fail-safe the hub."""
+        self.stop_keepalive()
+        try:
+            self.fail_safe()
+        except Exception:
+            pass
 
     def get_module_status(self, clear: bool = False) -> ModuleStatus:
         """Read (and optionally clear) the module status register.
