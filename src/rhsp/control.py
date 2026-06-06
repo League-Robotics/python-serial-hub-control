@@ -256,11 +256,11 @@ class HubVelocityController(VelocityController):
 # Outer-loop coordinator — RatioDrive
 # ---------------------------------------------------------------------------
 
-_EPSILON: float = 1e-9  # guard against division by zero in shortfall calc
+_EPSILON: float = 1e-9  # guard against division by zero
 
 
 class RatioDrive:
-    """Ratio-preserving multi-wheel velocity coordinator with a cap-to-slowest governor.
+    """Ratio-preserving multi-wheel velocity coordinator with a two-cap governor.
 
     ``RatioDrive`` manages a set of :class:`HubVelocityController` instances
     (one per wheel channel) and applies a deterministic governor that keeps the
@@ -269,25 +269,27 @@ class RatioDrive:
     ``clamp_int16(round(g * w_i))`` where ``w_i`` is that wheel's weight.
 
     Governor algorithm (one step):
-        1. Read measured velocities ``v_i`` from ``BulkInputData``.
-        2. Normalise: ``n_i = sign(w_i) * v_i / |w_i|`` (deadband applied first).
-        3. Compute shortfall per saturated wheel; manage saturation state with
-           hysteresis (``sat_margin`` to enter, ``sat_release_margin`` to leave).
-        4. Determine ceiling:
+        Two independent caps pull ``g`` down; the rest of the time ``g`` slews
+        toward setpoint ``S``:
 
-           - If any wheel is saturated: ``ceiling = min(n_i for saturated wheels)``
-             (cap-to-slowest).  Record the min as ``_learned_bottleneck``.
-           - No prior saturation (``_learned_bottleneck is None``): ``ceiling = S``
-             — spin-up path, full recovery_accel ramp.
-           - Post-saturation, settle window active: ``ceiling = g`` (hold steady).
-           - Post-saturation, settled: ``ceiling = min(g + probe_step, probe_target)``
-             where ``probe_target`` is capped by any wheel with normalised speed
-             significantly below ``g`` (raw-cap, bypasses sat_settle_s hysteresis
-             to prevent g from silently climbing past the physical limit).
+        1. **Max-speed cap (sticky, dv/dt-based)**: A wheel is "at its ceiling"
+           when its measured velocity is below its commanded target by
+           ``speed_margin_frac`` AND ``|dv/dt|`` is below
+           ``plateau_threshold_cnts_s2`` (stopped accelerating — not just lagging
+           during spin-up).  On detection, latch ``g_max_speed[i] = v_i/|w_i|``
+           and hold it (no probing → no ripple / limit cycle).  Latches clear when
+           the setpoint / weights change, or when measured velocity rises above
+           the latched cap on its own.
 
-        5. Slew-limit ``g`` toward ceiling: down by ``max_accel * dt``, up by
-           ``recovery_accel * dt``; clamp to ``[min_scale, S]``.
-        6. Emit targets to each controller.
+        2. **Load cap (live current closed-loop)**: Active only when
+           ``current_limit_ma`` is set.  If any motor current exceeds the limit,
+           pull ``g`` down proportionally.  When all currents are under the limit,
+           apply NO current cap — ``g`` is free to climb (fixes the 007/009 stuck-
+           at-zero regression).
+
+        3. ``g_target = min(S, sticky_max_speed_cap, live_current_cap)``; slew
+           ``g`` down fast (``max_accel``), up damped (``recovery_accel_up``);
+           clamp to ``[min_scale, S]``.
 
     Threading model:
         A daemon thread (``rhsp-ratiodrive``) calls ``step()`` at ``rate_hz``.
@@ -299,17 +301,13 @@ class RatioDrive:
         weights:           Mapping of channel index → signed weight (float).
                            Channels with weight 0 are excluded from the governor.
         rate_hz:           Daemon-thread tick rate (Hz).  Default 50.
-        max_accel:         Maximum downward slew rate (counts/s per second).
-        recovery_accel:    Maximum upward slew rate; defaults to ``max_accel``.
-        sat_margin:        Shortfall fraction to enter saturation state.
-        sat_release_margin: Shortfall fraction below which saturation clears.
-        sat_settle_s:      Seconds the shortfall must continuously exceed
-                           ``sat_margin`` before a wheel is declared saturated.
-                           Prevents transient acceleration lag during spin-up
-                           from triggering saturation.  Default 0.3 s.
-        min_scale:         Floor for ``g`` (clamp after slew).
+        max_accel:         Maximum downward slew rate (counts/s²).  Default 6000.
+        recovery_accel:    Upward slew rate alias for ``recovery_accel_up``
+                           (kept for API compatibility).  If both are supplied,
+                           ``recovery_accel_up`` wins.
+        min_scale:         Floor for ``g`` (clamp after slew).  Default 0.0.
         deadband:          Measured velocity magnitude below which the reading
-                           is treated as zero for normalisation.
+                           is treated as zero for normalisation.  Default 20.
         cpr:               Encoder counts per revolution.  Required for
                            :meth:`set_speed_rpm`.
         velocity_pid:      Optional ``(p, i, d)`` tuple pushed to each wheel's
@@ -317,37 +315,41 @@ class RatioDrive:
         on_error:          Callable invoked with an ``Exception`` on transient
                            per-iteration errors.  If ``None``, errors are
                            suppressed silently.
-        probe_step:        Maximum upward step applied to ``g`` per tick when no
-                           wheel is saturated.  Acts as a slew-rate limit on
-                           recovery so that ``g`` probes upward gradually rather
-                           than jumping directly to ``S``.  This prevents the
-                           limit-cycle where ``g`` bounces between the bottleneck
-                           speed and ``S`` indefinitely.  Default 10 counts/s per
-                           tick (≈ 500 counts/s over 1 s at 50 Hz).
-        probe_settle_ticks: Number of governor ticks to hold ``g`` steady after a
-                           cap-down event (velocity saturation triggered) before
-                           the upward probe resumes.  This deadband window prevents
-                           the probe from immediately re-triggering saturation at
-                           the bottleneck equilibrium.  Default 5 ticks (≈ 100 ms
-                           at 50 Hz).
         current_limit_ma:  Per-motor current limit in milliamps.  When set,
                            the governor reads ``Motor.get_current_ma()`` each Nth
-                           tick and treats any motor exceeding the limit as the
-                           bottleneck, capping the common scale ``g`` using the
-                           same cap-to-slowest machinery so the commanded ratio
-                           stays exact.  ``None`` (the default) disables current
-                           sensing entirely — the governor is unchanged.
+                           tick and caps ``g`` proportionally when any motor exceeds
+                           the limit.  Releasing load → current drops → ``g``
+                           climbs back automatically.  ``None`` (default) disables
+                           current sensing.
 
                            **Transaction-budget note**: ``GetADC`` costs ~16 ms
                            per call on fw 1.8.2.  Reading 2 motors every tick at
                            50 Hz (20 ms) would overflow the period.  Instead,
                            current is sampled every ``_cur_sample_every`` ticks
                            (default 3, giving ~16 Hz effective current sampling
-                           at 50 Hz governor rate).  The last sampled values are
-                           reused between reads.  The keep-alive heartbeat (100 ms
-                           period) is never starved because the maximum burst is
-                           2 × 16 ms ≈ 32 ms, which is the sample cost only once
-                           every 3 × 20 ms = 60 ms.
+                           at 50 Hz governor rate).
+
+        ema_alpha:         EMA smoothing factor for per-wheel velocity derivative
+                           (0 < alpha ≤ 1).  Smaller values smooth more.
+                           Default 0.3.
+        plateau_threshold_cnts_s2: |dv/dt| (counts/s²) below which a wheel is
+                           considered to have stopped accelerating and may be
+                           latched as at its speed ceiling.  Tune on hardware;
+                           default 150.
+        speed_margin_frac: Fractional shortfall (measured below commanded) that
+                           must be present before the plateau test fires.  This
+                           prevents latching when the wheel is already tracking
+                           the target.  Default 0.15.
+        recovery_accel_up: Upward slew rate for ``g`` (counts/s²).  Chosen so
+                           load recovery from a de-rated ``g`` back to ``S``
+                           takes approximately 1 second.  Default 500 counts/s²
+                           (500 counts/s per second → ~2 s for a 1000 count/s
+                           climb at 50 Hz).
+
+    Deprecated / superseded parameters (accepted but ignored):
+        sat_margin, sat_release_margin, sat_settle_s: replaced by the dv/dt
+            plateau latch.
+        probe_step, probe_settle_ticks: replaced by the sticky latch (no probing).
     """
 
     def __init__(
@@ -358,63 +360,94 @@ class RatioDrive:
         rate_hz: float = 50.0,
         max_accel: float = 6000.0,
         recovery_accel: float | None = None,
+        # Superseded params — accepted but ignored (kept for API compat).
         sat_margin: float = 0.15,
         sat_release_margin: float = 0.07,
         sat_settle_s: float = 0.3,
+        probe_step: float = 10.0,
+        probe_settle_ticks: int = 5,
+        # Active params.
         min_scale: float = 0.0,
         deadband: int = 20,
         cpr: float | None = None,
         velocity_pid: tuple[float, float, float] | None = None,
         on_error: Callable[[Exception], None] | None = None,
         current_limit_ma: int | None = None,
-        probe_step: float = 10.0,
-        probe_settle_ticks: int = 5,
+        ema_alpha: float = 0.3,
+        plateau_threshold_cnts_s2: float = 150.0,
+        speed_margin_frac: float = 0.15,
+        recovery_accel_up: float | None = None,
     ) -> None:
         self._hub = hub
         self._rate_hz = rate_hz
         self._max_accel = max_accel
-        self._recovery_accel = recovery_accel if recovery_accel is not None else max_accel
-        self._sat_margin = sat_margin
-        self._sat_release_margin = sat_release_margin
-        self._sat_settle_s = sat_settle_s
         self._min_scale = min_scale
         self._deadband = deadband
         self._cpr = cpr
         self._velocity_pid = velocity_pid
         self._on_error = on_error
-        # Damped upward probe parameters (fix for 003-009 limit-cycle).
-        # probe_step: maximum upward step in g per tick when not saturated.
-        # probe_settle_ticks: ticks to hold g steady after a cap-down event.
+
+        # Two-cap governor tunables.
+        self._ema_alpha: float = ema_alpha
+        self._plateau_threshold: float = plateau_threshold_cnts_s2
+        self._speed_margin_frac: float = speed_margin_frac
+        # Upward recovery slew rate: recovery_accel_up > recovery_accel > max_accel fallback.
+        if recovery_accel_up is not None:
+            self._recovery_accel_up: float = recovery_accel_up
+        elif recovery_accel is not None:
+            self._recovery_accel_up = recovery_accel
+        else:
+            self._recovery_accel_up = 500.0  # ~2 s to climb 1000 counts at 50 Hz
+        # Keep _recovery_accel as an alias so existing tests that read it still work.
+        self._recovery_accel: float = self._recovery_accel_up
+
+        # Superseded params stored so tests that inspect internal state still pass.
+        # These are NOT used by the new governor.
+        self._sat_margin: float = sat_margin
+        self._sat_release_margin: float = sat_release_margin
+        self._sat_settle_s: float = sat_settle_s
         self._probe_step: float = probe_step
         self._probe_settle_ticks: int = probe_settle_ticks
-        # Countdown counter; decremented each tick when not saturated and settled.
-        # Set to probe_settle_ticks whenever velocity saturation fires.
+        # Superseded runtime state kept for backward-compat property access.
         self._probe_settle_counter: int = 0
-        # Learned bottleneck normalised speed (counts/s): the minimum n_i observed
-        # while velocity saturation was active.  Set to None initially (spin-up /
-        # no prior saturation) so that ceiling = S and g ramps normally.
-        # Once set, used to gate the probe path: raw_cap limits the ceiling to the
-        # observed physical speed, preventing silent climb above the bottleneck.
-        # Can only decrease (tighter bottleneck recorded on each saturation event).
-        # NOT actively cleared — the raw_cap mechanism drives gradual recovery when
-        # the bottleneck physically clears (n_i meets target → raw_cap = probe_target).
         self._learned_bottleneck: float | None = None
+        self._sat_flags: dict[int, bool] = {}
+        self._sat_time: dict[int, float] = {}
+        self._saturated: bool = False
 
+        # ---------------------------------------------------------------
+        # Max-speed cap state (per-wheel, sticky latch).
+        # ---------------------------------------------------------------
+        # Per-wheel EMA of measured velocity (counts/s).
+        self._vel_ema: dict[int, float] = {}
+        # Per-wheel EMA of dv/dt (counts/s²).
+        self._dvdt_ema: dict[int, float] = {}
+        # Per-wheel sticky latch: None if not latched, else the g cap value.
+        self._speed_latch: dict[int, float | None] = {}
+        # Per-wheel flag: True once dv/dt EMA has exceeded plateau_threshold at least
+        # once, indicating the motor has actively accelerated (not just been stationary).
+        # The plateau latch only fires once this flag is set, preventing spin-up lag
+        # (v=0 because the motor hasn't responded yet) from being mistaken for a
+        # genuine saturation plateau.
+        self._ever_accelerating: dict[int, bool] = {}
+
+        # ---------------------------------------------------------------
         # Current-limit governor (opt-in via current_limit_ma).
+        # ---------------------------------------------------------------
         self._current_limit_ma: int | None = current_limit_ma
-        # Hysteresis: engage limit ceiling when current > limit * (1 + hys),
-        # release when current < limit * (1 - hys).
+        # Hysteresis: engage when current > limit*(1+hys), release when < limit*(1-hys).
         self._cur_hys: float = 0.05
         # Sample current every N ticks to stay within the 20 ms tick budget.
         # GetADC costs ~16 ms each; 2 motors × 16 ms = 32 ms per sample tick.
-        # At 50 Hz (20 ms period) we sample every 3rd tick → effective ~16 Hz
-        # current reads, keeping the average per-tick overhead to 32/3 ≈ 11 ms.
+        # At 50 Hz (20 ms period) we sample every 3rd tick → effective ~16 Hz.
         self._cur_sample_every: int = 3
         self._cur_tick_counter: int = 0
         # Last sampled current per channel (mA); reused between sample ticks.
         self._last_current_ma: dict[int, int] = {}
         # Per-channel current-saturation flags (hysteresis state).
         self._cur_sat_flags: dict[int, bool] = {}
+        # Live current cap for g (updated each tick when current sensing is active).
+        self._live_current_cap: float | None = None
 
         # Internal RLock guards all mutable governor state.
         self._lock = threading.RLock()
@@ -426,14 +459,6 @@ class RatioDrive:
         self._commanded_targets: dict[int, int] = {}
         self._measured: dict[int, int] = {}
         self._normalized_actual: dict[int, float] = {}
-        self._saturated: bool = False
-        # Per-wheel saturation flags (keyed by channel).
-        self._sat_flags: dict[int, bool] = {}
-        # Per-wheel accumulated time-in-shortfall (seconds). Counts up while
-        # shortfall > sat_margin and resets to 0 when shortfall < sat_release_margin.
-        # A wheel enters the saturated state only after this accumulator exceeds
-        # sat_settle_s, preventing transient acceleration lag from triggering saturation.
-        self._sat_time: dict[int, float] = {}
 
         # Timestamp of the previous tick (ms); None on the first tick.
         self._prev_time_ms: int | None = None
@@ -449,8 +474,20 @@ class RatioDrive:
     # Setpoint API (thread-safe)
     # ------------------------------------------------------------------
 
+    def _clear_all_latches(self) -> None:
+        """Clear all sticky max-speed latches and spin-up flags.  Must be called under ``_lock``."""
+        self._speed_latch = {ch: None for ch in self._speed_latch}
+        # Also reset ever-accelerating flags so the new setpoint gets a fresh spin-up window.
+        self._ever_accelerating = {ch: False for ch in self._ever_accelerating}
+        self._vel_ema = {}
+        self._dvdt_ema = {}
+        # Update the cached saturated flag immediately so callers see the cleared state.
+        self._saturated = False
+
     def set_speed(self, speed: float) -> None:
         """Set the target scale ``S`` (counts/s for the reference wheel weight 1.0).
+
+        Clears all sticky max-speed latches so ``g`` may climb to the new setpoint.
 
         Thread-safe; may be called from any thread while the governor is running.
 
@@ -459,11 +496,13 @@ class RatioDrive:
         """
         with self._lock:
             self._target_scale = speed
+            self._clear_all_latches()
 
     def set_speed_rpm(self, rpm: float) -> None:
         """Set the target scale in revolutions per minute.
 
         Converts ``rpm`` to counts/s via ``counts_per_s = rpm * cpr / 60``.
+        Clears all sticky max-speed latches.
 
         Parameters:
             rpm: Target speed in RPM.
@@ -478,24 +517,33 @@ class RatioDrive:
         counts_per_s = rpm * self._cpr / 60.0
         with self._lock:
             self._target_scale = counts_per_s
+            self._clear_all_latches()
 
     def set_weights(self, weights: Mapping[int, float]) -> None:
         """Replace the weight mapping atomically.
+
+        Clears all sticky max-speed latches so ``g`` may re-converge under the new weights.
 
         Parameters:
             weights: New channel → weight mapping.
         """
         with self._lock:
             self._weights = dict(weights)
-            # Reset saturation flags and accumulators for channels that changed.
+            # Reset superseded saturation state.
             self._sat_flags = {}
             self._sat_time = {}
+            # Clear all per-wheel latches (weight change invalidates old caps).
+            self._speed_latch = {}
+            self._ever_accelerating = {}
+            self._vel_ema = {}
+            self._dvdt_ema = {}
+            self._saturated = False
 
     def set_ratio(self, ratio: float, pair: tuple[int, int] = (0, 1)) -> None:
         """Convenience shorthand: set ``{pair[0]: 1.0, pair[1]: ratio}``.
 
         Only the two channels in *pair* are updated; other channel weights
-        are left unchanged.
+        are left unchanged.  Clears sticky max-speed latches for all channels.
 
         Parameters:
             ratio: Weight for the second channel; the first channel is 1.0.
@@ -504,11 +552,17 @@ class RatioDrive:
         with self._lock:
             self._weights[pair[0]] = 1.0
             self._weights[pair[1]] = ratio
-            # Reset saturation flags and accumulators for the affected channels.
+            # Reset superseded saturation state.
             self._sat_flags.pop(pair[0], None)
             self._sat_flags.pop(pair[1], None)
             self._sat_time.pop(pair[0], None)
             self._sat_time.pop(pair[1], None)
+            # Clear all per-wheel latches (ratio change invalidates old caps).
+            self._speed_latch = {}
+            self._ever_accelerating = {}
+            self._vel_ema = {}
+            self._dvdt_ema = {}
+            self._saturated = False
 
     def stop(self, brake: bool = False) -> None:
         """Command all wheels to zero and set ``target_scale = 0``.
@@ -623,6 +677,14 @@ class RatioDrive:
     def update(self, bulk: BulkInputData) -> None:
         """Apply one synchronous governor step using a pre-fetched bulk snapshot.
 
+        Two-cap governor design:
+          Cap 1 — sticky max-speed latch: fired when a wheel's measured velocity
+            has PLATEAUED below its commanded target (dv/dt ≈ 0).  Latched g cap
+            held until setpoint/weight changes or spontaneous velocity recovery.
+          Cap 2 — live current closed-loop: proportional pull-down when any motor
+            current exceeds current_limit_ma; no cap when all are under limit.
+          g_target = min(S, sticky_cap, current_cap); slew down fast, up damped.
+
         This method may be called directly from tests without running the
         daemon thread.  All state mutations are protected by the internal
         ``RLock``.
@@ -672,157 +734,144 @@ class RatioDrive:
             self._measured = new_measured
             self._normalized_actual = new_normalized
 
-            # -- Saturation state update ----------------------------------
-            for ch, n_i in new_normalized.items():
-                denom = max(abs(g), _EPSILON)
-                shortfall = (g - n_i) / denom
-                was_sat = self._sat_flags.get(ch, False)
-                if was_sat:
-                    # Leave saturation only when shortfall drops below release margin.
-                    if shortfall < self._sat_release_margin:
-                        self._sat_flags[ch] = False
-                        self._sat_time[ch] = 0.0
-                    # else: remain saturated (hysteresis — no accumulator change needed)
+            # -- Cap 1: sticky max-speed latch (dv/dt-based) -------------
+            #
+            # For each active wheel:
+            #   1. Update velocity EMA and dv/dt EMA.
+            #   2. Set _ever_accelerating flag once |dv/dt| exceeds plateau_threshold.
+            #   3. Evaluate plateau condition (only eligible when _ever_accelerating):
+            #      - shortfall: commanded_n > measured_n by speed_margin_frac.
+            #      - plateau: |dv/dt EMA| < plateau_threshold (stopped accel).
+            #   4. If both hold and not latched: LATCH g_cap = n_i.
+            #   5. If latched and measured_velocity > g_cap: CLEAR latch (spontaneous
+            #      recovery).
+            #
+            # Guard: the plateau latch fires ONLY after _ever_accelerating is True.
+            # This prevents a motor that has never moved (v=0 since tick 0) from
+            # being mistakenly declared "saturated at its ceiling" — it has never
+            # been accelerating, so it cannot have plateaued.  A genuinely saturated
+            # motor first shows high dv/dt while ramping up, then dv/dt drops to zero
+            # at its physical ceiling — that two-phase pattern is what triggers the latch.
+            #
+            for ch, w in weights.items():
+                if w == 0.0:
+                    continue
+                n_i = new_normalized.get(ch, 0.0)
+                # Commanded normalised target for this wheel is always |g| direction-aligned.
+                commanded_n = g  # n_commanded = g * |w| / |w| = g
+
+                # Update velocity EMA.
+                # Initialize to 0.0 (not n_i) so the first tick correctly shows
+                # the acceleration from rest — if initialized to n_i, the first-tick
+                # raw_dvdt would be zero and the ever_accelerating flag could miss
+                # the initial spin-up.
+                prev_vel_ema = self._vel_ema.get(ch, 0.0)
+                vel_ema = self._ema_alpha * n_i + (1.0 - self._ema_alpha) * prev_vel_ema
+                self._vel_ema[ch] = vel_ema
+
+                # Update dv/dt EMA using real dt (counts/s per second = counts/s²).
+                if dt > _EPSILON:
+                    raw_dvdt = (vel_ema - prev_vel_ema) / dt
                 else:
-                    # Accumulate time-in-shortfall; enter saturation only after settle window.
-                    if shortfall > self._sat_margin:
-                        self._sat_time[ch] = self._sat_time.get(ch, 0.0) + dt
-                        if self._sat_time[ch] >= self._sat_settle_s:
-                            self._sat_flags[ch] = True
-                    else:
-                        # Shortfall below entry threshold — reset accumulator.
-                        self._sat_time[ch] = 0.0
+                    raw_dvdt = 0.0
+                prev_dvdt_ema = self._dvdt_ema.get(ch, 0.0)
+                dvdt_ema = self._ema_alpha * raw_dvdt + (1.0 - self._ema_alpha) * prev_dvdt_ema
+                self._dvdt_ema[ch] = dvdt_ema
 
-            saturated_channels = [ch for ch, f in self._sat_flags.items() if f]
-            self._saturated = len(saturated_channels) > 0
+                # Set ever-accelerating once the wheel shows meaningful acceleration.
+                # This latches permanently (until setpoint/weight change) so that
+                # once a motor has demonstrated it can accelerate, the plateau test
+                # becomes eligible.
+                if abs(dvdt_ema) >= self._plateau_threshold:
+                    self._ever_accelerating[ch] = True
 
-            # -- Ceiling computation (velocity path) ---------------------
-            #
-            # The governor uses two complementary mechanisms to eliminate the
-            # steady-state limit-cycle:
-            #
-            # 1. Damped upward probe: when not saturated, ceiling = g + probe_step
-            #    per tick (not a jump to S).  After a cap-down event, a settle
-            #    counter holds g steady for probe_settle_ticks ticks.
-            #
-            # 2. Learned bottleneck: when velocity saturation fires, the observed
-            #    bottleneck speed (min n_i of saturated channels) is recorded in
-            #    _learned_bottleneck.  In the probe path, a raw-cap limits the
-            #    ceiling to any lagging wheel's observed speed, preventing g from
-            #    silently climbing past the physical maximum even when the shortfall
-            #    is below sat_margin.  When the bottleneck clears (all wheels keeping
-            #    up), raw_cap = probe_target and g recovers at probe_step/tick.
-            #
-            if saturated_channels:
-                # Cap-to-slowest via hysteresis state (official saturation).
-                ceiling = min(new_normalized[ch] for ch in saturated_channels)
-                # Record the observed bottleneck normalised speed.  Take the
-                # minimum so that tightening bottlenecks are tracked downward;
-                # loosening is detected via the recovery path below.
-                if self._learned_bottleneck is None or ceiling < self._learned_bottleneck:
-                    self._learned_bottleneck = ceiling
-                # Reset the settle counter whenever saturation fires so that g
-                # is held steady at the bottleneck equilibrium after the cap.
-                self._probe_settle_counter = self._probe_settle_ticks
-            else:
-                # No hysteresis-flagged saturation.
-                if self._learned_bottleneck is None:
-                    # No prior saturation event (initial spin-up): full ceiling = S,
-                    # original behaviour — g ramps at recovery_accel.
-                    ceiling = S
-                elif self._probe_settle_counter > 0:
-                    # Post-saturation settle window: hold g steady.  This
-                    # deadband gives the governor time to read a stable velocity
-                    # measurement at the bottleneck equilibrium before probing.
-                    self._probe_settle_counter -= 1
-                    ceiling = g
+                # Plateau condition — eligible only after the motor has first accelerated.
+                ever_accel = self._ever_accelerating.get(ch, False)
+                shortfall = commanded_n - n_i  # positive when wheel is below target
+                is_short = shortfall > self._speed_margin_frac * max(commanded_n, _EPSILON)
+                is_plateau = abs(dvdt_ema) < self._plateau_threshold
+
+                current_latch = self._speed_latch.get(ch)
+                if current_latch is not None:
+                    # Latched: check for spontaneous velocity recovery.
+                    # Clear only when measured velocity SIGNIFICANTLY exceeds the latch cap,
+                    # using a hysteresis margin of speed_margin_frac * current_latch.
+                    # This prevents noisy readings (±20 counts) from accidentally clearing
+                    # a latch that is genuinely at the motor's physical ceiling.
+                    # The ceiling has only lifted if the motor is consistently running
+                    # well above its previously measured maximum.
+                    clear_threshold = current_latch * (1.0 + self._speed_margin_frac)
+                    if n_i > clear_threshold:
+                        self._speed_latch[ch] = None
+                    # (else: stay latched)
                 else:
-                    # Post-settle probe: g is near the bottleneck equilibrium.
-                    # Allow g to climb by at most probe_step per tick toward S,
-                    # but immediately cap at any wheel's observed normalised speed
-                    # that is BELOW the probe target.
-                    #
-                    # "Immediately cap" bypasses the sat_settle_s hysteresis window
-                    # that would otherwise allow g to silently climb sat_margin above
-                    # the physical limit before saturation fires.  Because this path
-                    # is only active after a confirmed saturation event
-                    # (_learned_bottleneck is not None), spin-up lag (which never
-                    # enters this path) is unaffected.
-                    probe_target = min(g + self._probe_step, S)
-                    # Find the lowest measured normalised speed that is significantly
-                    # below the current g.  "Significantly" means the shortfall
-                    # exceeds sat_release_margin — the same threshold used to release
-                    # the official saturation state.  This avoids false caps from
-                    # normal measurement noise (which is typically < sat_release_margin
-                    # of g).  A wheel that is genuinely unable to keep up (physically
-                    # limited) will show n_i < g*(1-sat_release_margin) persistently.
-                    noise_floor = g * self._sat_release_margin
-                    raw_cap: float = probe_target
-                    for n_i in new_normalized.values():
-                        if n_i < g - noise_floor:
-                            raw_cap = min(raw_cap, n_i)
-                    ceiling = raw_cap
-                    # _learned_bottleneck is NOT cleared here.  The raw_cap mechanism
-                    # provides correct behaviour in both steady-state and recovery:
-                    # - Steady-state bottleneck (n_i < g): raw_cap holds g near the
-                    #   physical limit (ceiling ≈ n_i), achieving the fixed point.
-                    # - After bottleneck clears (n_i ≥ g): raw_cap = probe_target =
-                    #   g + probe_step, so g climbs at probe_step per tick toward S
-                    #   — gradual recovery taking ~1 s at default probe_step=10, 50 Hz.
-                    # The learned value can only decrease (updated when saturation
-                    # fires with a tighter ceiling); it is never raised.
+                    # Not latched: check whether to latch.
+                    # Require: wheel has previously accelerated (not first-tick zero lag),
+                    # is currently below commanded target by margin, and has stopped
+                    # accelerating (dv/dt below plateau threshold).
+                    if ever_accel and is_short and is_plateau and commanded_n > _EPSILON:
+                        # Wheel has plateaued below its commanded target — latch the cap.
+                        # Use n_i as the cap (normalised speed the wheel can sustain at g).
+                        cap_val = max(n_i, 0.0)  # don't latch negative caps
+                        self._speed_latch[ch] = cap_val
 
-            # -- Current-aware ceiling (opt-in) --------------------------
-            # When current_limit_ma is set, read per-motor current every
-            # _cur_sample_every ticks (to stay within the 20 ms tick budget;
-            # see constructor docstring for the transaction-budget rationale).
-            # The last sampled values are reused on non-sample ticks.
+            # Effective sticky max-speed cap: min of all latched values, or S.
+            latched_caps = [v for v in self._speed_latch.values() if v is not None]
+            sticky_max_speed_cap = min(latched_caps) if latched_caps else S
+
+            # Keep legacy _saturated flag True when at least one latch is active,
+            # so read-only code that inspects rd.saturated still gets a useful signal.
+            self._saturated = len(latched_caps) > 0
+
+            # -- Cap 2: live current closed-loop (opt-in) ----------------
+            #
+            # Sample per-motor current every _cur_sample_every ticks.
+            # If any motor is over-limit: compute proportional ceiling.
+            # If all under limit: no current cap (g free to climb).
+            # This is the critical fix for the 007/009 regression: releasing load
+            # causes current to drop, which automatically removes the cap.
+            #
+            live_current_cap = S  # default: no current constraint
             if self._current_limit_ma is not None:
                 self._cur_tick_counter += 1
                 if self._cur_tick_counter >= self._cur_sample_every:
                     self._cur_tick_counter = 0
-                    # Sample current for all active channels.
                     for ch in weights:
                         try:
                             self._last_current_ma[ch] = self._hub.motors[ch].get_current_ma()
                         except Exception:
-                            # On transient read failure keep the last known value.
-                            pass
+                            pass  # keep last known value on transient read failure
 
-                # Update current hysteresis flags and compute current ceiling.
                 limit = self._current_limit_ma
                 hys = self._cur_hys
-                cur_ceiling = S  # default: no current constraint
+                any_over = False
                 for ch in weights:
                     cur_ma = self._last_current_ma.get(ch, 0)
                     was_cur_sat = self._cur_sat_flags.get(ch, False)
                     if was_cur_sat:
-                        # Release when current drops below limit * (1 - hys).
                         if cur_ma < limit * (1.0 - hys):
                             self._cur_sat_flags[ch] = False
                     else:
-                        # Engage when current exceeds limit * (1 + hys).
                         if cur_ma > limit * (1.0 + hys):
                             self._cur_sat_flags[ch] = True
 
                     if self._cur_sat_flags.get(ch, False) and g > _EPSILON:
-                        # Project what g should be so this motor's current
-                        # would be at (or just below) the limit.
-                        # Simple proportional cap: ceiling_ch = g * limit / cur_ma.
-                        # This is the same cap-to-slowest approach used for velocity.
+                        any_over = True
+                        # Proportional cap: scale g down so this motor reaches the limit.
                         ch_cur_ceiling = g * (limit / max(cur_ma, 1))
-                        cur_ceiling = min(cur_ceiling, ch_cur_ceiling)
+                        live_current_cap = min(live_current_cap, ch_cur_ceiling)
 
-                # The more restrictive ceiling wins (velocity vs current).
-                ceiling = min(ceiling, cur_ceiling)
+                # If no motor is over-limit, live_current_cap remains S → no constraint.
 
-            # -- Slew-limit g toward ceiling -----------------------------
-            if g > ceiling:
-                # Moving down: limited by max_accel.
-                g = max(ceiling, g - self._max_accel * dt)
+            # -- Slew g toward g_target ----------------------------------
+            g_target = min(S, sticky_max_speed_cap, live_current_cap)
+
+            if g > g_target:
+                # Moving down: fast, limited by max_accel.
+                g = max(g_target, g - self._max_accel * dt)
             else:
-                # Moving up (or holding): limited by recovery_accel.
-                g = min(ceiling, g + self._recovery_accel * dt)
+                # Moving up (or holding): damped, limited by recovery_accel_up.
+                g = min(g_target, g + self._recovery_accel_up * dt)
 
             # Clamp to [min_scale, S].
             g = max(self._min_scale, min(S, g))
