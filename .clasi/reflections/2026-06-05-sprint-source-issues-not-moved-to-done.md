@@ -80,3 +80,29 @@ link the two remaining issues to the new sprint at creation).
 For the next sprint (delivering `hub-managed-led-reassert` and the motor
 velocity ratio-drive issue), I will call `link_sprint_issues` right after
 `create_sprint`, and verify both issues are moved to `done/` as part of close.
+
+## Update (Sprint 002 — fix validated, with a sharper finding)
+
+Sprint 002 applied the fix: `link_sprint_issues("002", [...])` was called right
+after `create_sprint`, which moved both issues into
+`sprints/002/issues/`. At close, both ended up in `sprints/002/issues/done/`
+and the pending pool was left empty. The process change works.
+
+But a sharper mechanism emerged that strengthens proposed fix #2/#3:
+**`move_ticket_to_done` only auto-reconciles a SINGLE-ticket issue.** The LED
+issue (one ticket, `001`, `completes_issue: true`) auto-moved to
+`issues/done/` when ticket 001 was archived — the tool returned
+`completed_issues: [...]`. The motor issue (three tickets `002/003/004`, with
+`completes_issue: true` only on the final ticket `004`) did **not** auto-move
+when ticket 004 was archived — the move returned no `completed_issues`. It had
+to be reconciled with an explicit `move_issue_to_done(filename,
+sprint_id="002", ticket_ids=[...])`.
+
+Implication: an issue spanning multiple tickets is silently left in
+`<sprint>/issues/` (not `done/`) unless the team-lead explicitly reconciles it
+or the completer-ticket's `move_ticket_to_done` is taught to check that *all*
+sibling tickets referencing the issue are done. The manual close-time
+verification (proposed fix #2) is what caught it here — confirming that gate is
+necessary, not optional. The CLASI tooling fix should make
+`move_ticket_to_done` reconcile a multi-ticket issue when its last referencing
+ticket is archived, OR have `close_sprint` hard-check every linked issue.
