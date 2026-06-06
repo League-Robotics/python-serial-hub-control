@@ -38,6 +38,7 @@ from .enums import (  # noqa: F401
     ZeroPowerBehavior,
 )
 from .devices.bulk import BulkInputData, ModuleStatus  # noqa: F401
+from .control import RatioDrive, VelocityController, HubVelocityController  # noqa: F401
 
 __all__ = [
     # discovery / connection
@@ -65,4 +66,8 @@ __all__ = [
     # bulk dataclasses
     "BulkInputData",
     "ModuleStatus",
+    # velocity control
+    "VelocityController",
+    "HubVelocityController",
+    "RatioDrive",
 ]
