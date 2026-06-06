@@ -1,12 +1,12 @@
 ---
 id: '004'
-title: 'Public API exports + live-hub validation example'
-status: open
+title: Public API exports + live-hub validation example
+status: done
 use-cases:
-  - SUC-004
-  - SUC-005
+- SUC-004
+- SUC-005
 depends-on:
-  - '003'
+- '003'
 github-issue: ''
 issue: plan-two-layer-motor-velocity-control-on-hub-pid-host-side-ratio-coordinator.md
 completes_issue: true
@@ -33,38 +33,38 @@ controller logic is complete in tickets 001-003.
 
 ### Public API Exports
 
-- [ ] `src/rhsp/__init__.py`: `RatioDrive` and `VelocityController` are imported
+- [x] `src/rhsp/__init__.py`: `RatioDrive` and `VelocityController` are imported
       from `rhsp.control` and added to `__all__`.
-- [ ] `from rhsp import RatioDrive, VelocityController` works in a clean Python
+- [x] `from rhsp import RatioDrive, VelocityController` works in a clean Python
       environment with the package installed editable.
 
 ### Live-Hub Validation Example
 
-- [ ] `examples/test_ratio_drive.py` auto-skips cleanly (prints a skip message
+- [x] `examples/test_ratio_drive.py` auto-skips cleanly (prints a skip message
       and exits 0) when the hub at `/dev/cu.usbserial-DQ3M375O` is not available.
-- [ ] **Step 1 — Capability probe**: before running any ratio test, attempt to
+- [x] **Step 1 — Capability probe**: before running any ratio test, attempt to
       attach a single `HubVelocityController` on channel 0, command a non-zero
       target, read velocity from a bulk snapshot, and confirm the measurement is
       non-zero (within a short timeout). Print PASS/FAIL. Exit early if FAIL.
-- [ ] **Step 2 — 1:1 run**: `RatioDrive(hub, {0: 1.0, 1: 1.0}).set_speed(600)`;
+- [x] **Step 2 — 1:1 run**: `RatioDrive(hub, {0: 1.0, 1: 1.0}).set_speed(600)`;
       run for 3 s; log CSV rows of `target_scale, scale, v0, v1` at each
       `update()` tick; assert steady-state measured ratio `|v0/v1 - 1.0| < 0.10`.
-- [ ] **Step 3 — 1:0.5 run**: `RatioDrive(hub, {0: 1.0, 1: 0.5}).set_speed(1200)`;
+- [x] **Step 3 — 1:0.5 run**: `RatioDrive(hub, {0: 1.0, 1: 0.5}).set_speed(1200)`;
       run for 3 s; log CSV; assert steady-state measured ratio
       `|v0/v1 - 2.0| < 0.10`.
-- [ ] **Step 4 — Induced-bottleneck scenario**: operator manually loads (grips)
+- [x] **Step 4 — Induced-bottleneck scenario**: operator manually loads (grips)
       one wheel; the script observes `drive.saturated` becomes `True` and
       `drive.scale` drops below `target_scale`; then release — observe `scale`
       recovers toward `target_scale` within a configurable timeout. The script
       logs a CSV and prints PASS/FAIL for the de-rate and recovery assertions.
       (Because operator intervention is required, the script may prompt and wait
       rather than automate — that is acceptable.)
-- [ ] **Finally block**: `drive.close()` then `hub.fail_safe()` always called,
+- [x] **Finally block**: `drive.close()` then `hub.fail_safe()` always called,
       even on early exit or exception.
 
 ### Regression Gate
 
-- [ ] `uv run pytest` passes with >= 434 tests and no regressions.
+- [x] `uv run pytest` passes with >= 434 tests and no regressions.
       (`test_ratio_drive.py` is in `examples/`, not `tests/`, so it is not
       collected by pytest.)
 

@@ -70,3 +70,44 @@ def test_no_gui_entry_point() -> None:
     assert spec is None, (
         "rhsp.__main__ exists but should not — the GUI entry point was removed"
     )
+
+
+# ---------------------------------------------------------------------------
+# Ticket 002-004: velocity-control public API exports
+# ---------------------------------------------------------------------------
+
+
+def test_ratio_drive_importable() -> None:
+    """from rhsp import RatioDrive must work (ticket 002-004)."""
+    import inspect
+    from rhsp import RatioDrive
+    assert inspect.isclass(RatioDrive), "RatioDrive should be a class"
+
+
+def test_velocity_controller_importable() -> None:
+    """from rhsp import VelocityController must work (ticket 002-004)."""
+    import inspect
+    from rhsp import VelocityController
+    assert inspect.isclass(VelocityController), "VelocityController should be a class"
+
+
+def test_hub_velocity_controller_importable() -> None:
+    """from rhsp import HubVelocityController must work (ticket 002-004)."""
+    import inspect
+    from rhsp import HubVelocityController
+    assert inspect.isclass(HubVelocityController), "HubVelocityController should be a class"
+
+
+def test_velocity_control_in_dunder_all() -> None:
+    """RatioDrive, VelocityController, and HubVelocityController are in __all__."""
+    import rhsp
+    for name in ("RatioDrive", "VelocityController", "HubVelocityController"):
+        assert name in rhsp.__all__, f"{name!r} missing from rhsp.__all__"
+        assert hasattr(rhsp, name), f"rhsp has no attribute {name!r}"
+
+
+def test_ratio_drive_attribute_access() -> None:
+    """import rhsp; rhsp.RatioDrive must be the same class as rhsp.control.RatioDrive."""
+    import rhsp
+    from rhsp.control import RatioDrive as ControlRatioDrive
+    assert rhsp.RatioDrive is ControlRatioDrive
