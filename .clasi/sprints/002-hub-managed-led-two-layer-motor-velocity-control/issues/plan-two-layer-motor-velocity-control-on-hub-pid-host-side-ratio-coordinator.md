@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '002'
+tickets:
+- 002-002
 ---
 
 # Plan: Two-layer motor velocity control — on-hub PID + host-side ratio coordinator

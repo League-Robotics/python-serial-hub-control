@@ -1,4 +1,10 @@
 ---
+status: in-progress
+sprint: '002'
+tickets:
+- 002-001
+---
+ ---
 status: pending
 ---
 
