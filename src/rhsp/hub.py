@@ -52,7 +52,7 @@ from rhsp.devices.dio import DIOPin
 from rhsp.devices.i2c import I2CChannel
 from rhsp.devices.motor import Motor
 from rhsp.devices.servo import Servo
-from rhsp.enums import ModuleStatusBits, MotorMode
+from rhsp.enums import ADCChannel, ModuleStatusBits, MotorMode
 
 if TYPE_CHECKING:
     from rhsp.session import Session
@@ -419,8 +419,45 @@ class Hub:
         -------
         BulkInputData
             All input fields decoded into a single dataclass.
+
+        .. note::
+            On fw 1.8.2 the hub response is only ~34 bytes.  The
+            :class:`~rhsp.devices.bulk.BulkInputData` fields that are within
+            that window (encoders, velocities, modes, analog_input0/1) are
+            correct.  Fields beyond offset 34 are zero-padded and must not be
+            used for current or voltage readings — use
+            :meth:`battery_voltage_mv`, :meth:`battery_current_ma`, or
+            :meth:`~rhsp.devices.motor.Motor.get_current_ma` instead.
         """
         return self.session.get_bulk_input_data(dest=self.address)
+
+    def battery_voltage_mv(self) -> int:
+        """Read the battery voltage in millivolts via ``GetADC``.
+
+        Uses ADC channel ``ADC_BatteryMonitor`` (channel 13), which is the
+        correct and reliable method on fw 1.8.2.  The bulk-input path does not
+        carry battery voltage on this firmware.
+
+        Returns
+        -------
+        int
+            Battery voltage in millivolts.  Typically 11000–12500 mV when
+            fully charged.
+        """
+        return self.session.get_adc(self.address, ADCChannel.ADC_BatteryMonitor)
+
+    def battery_current_ma(self) -> int:
+        """Read the battery current in milliamps via ``GetADC``.
+
+        Uses ADC channel ``ADC_Battery`` (channel 7).  Reads 0 mA at idle
+        (no load).
+
+        Returns
+        -------
+        int
+            Battery current draw in milliamps.
+        """
+        return self.session.get_adc(self.address, ADCChannel.ADC_Battery)
 
     # ------------------------------------------------------------------
     # Dunder

@@ -1,9 +1,31 @@
 """BulkInputData and ModuleStatus dataclasses.
 
 ``BulkInputData`` decodes the ``GetBulkInputData`` response payload into a
-named dataclass.  All 47 fields from the response are represented with correct
-Python types:
+named dataclass.
 
+Hardware note — fw 1.8.2 payload truncation
+--------------------------------------------
+On REV Hub firmware 1.8.2 the ``GetBulkInputData`` response is only ~34 bytes.
+It ends after: digital_inputs (1 B), four motor encoders (16 B), motor_status
+(1 B), four velocities (8 B), four modes (4 B), analog_input0 (2 B),
+analog_input1 (2 B) — total 34 B.
+
+Fields beyond offset 34 (analog_input2, analog_input3, servo command/period
+fields, I2C data blocks, monotonic timestamp) are zero-padded by the tolerant
+``hub.bulk_input()`` path and will therefore read as 0, not as real hub
+values.  Callers should not rely on those fields for meaningful data on
+fw 1.8.2.
+
+The current and voltage monitor fields that were previously included
+(``motor0_current_ma`` … ``motor3_current_ma``, ``battery_current_ma``,
+``battery_voltage_mv``, ``mon5v_mv``, ``gpio_current_ma``, ``i2c_current_ma``,
+``servo_current_ma``) have been **removed** from ``BulkInputData`` because the
+hub never sends them on fw 1.8.2 and returning 0 was misleading.  Use
+``Motor.get_current_ma()``, ``Hub.battery_voltage_mv()``, and
+``Hub.battery_current_ma()`` to read those values via ``GetADC`` instead.
+
+Encoding notes
+--------------
 - Encoder fields (motor0Encoder … motor3Encoder) are signed 32-bit integers.
 - Velocity fields (motor0Velocity … motor3Velocity) are signed 16-bit integers.
 - The monotonic time field has the vendor typo ``mototonicTime`` in the JSON;
@@ -55,13 +77,27 @@ class ModuleStatus:
 
 @dataclass
 class BulkInputData:
-    """Decoded ``GetBulkInputData`` response — all 47+ fields.
+    """Decoded ``GetBulkInputData`` response.
 
     Encoder fields are signed 32-bit integers (reinterpreted here because the
     JSON overlay omits the ``signed`` flag for these fields).  Velocity fields
     are signed 16-bit integers for the same reason.
 
     The vendor typo ``mototonicTime`` is normalised to ``monotonic_time_ms``.
+
+    .. note::
+        Current and voltage monitor fields (``motor*_current_ma``,
+        ``battery_current_ma``, ``battery_voltage_mv``, ``mon5v_mv``,
+        ``gpio_current_ma``, ``i2c_current_ma``, ``servo_current_ma``) are
+        **not present in this dataclass**.  On fw 1.8.2 the hub response is
+        only ~34 bytes and those fields are never transmitted.  Read current
+        and voltage via ``Motor.get_current_ma()``,
+        ``Hub.battery_voltage_mv()``, and ``Hub.battery_current_ma()``
+        (all use ``GetADC``).
+
+        Fields beyond offset 34 (analog_input2/3, servo cmd/period fields,
+        I2C data, monotonic timestamp) are zero-padded by the tolerant decode
+        path on fw 1.8.2 and should not be relied upon for meaningful data.
     """
 
     # DIO
@@ -88,27 +124,16 @@ class BulkInputData:
     motor2_mode: int
     motor3_mode: int
 
-    # ADC inputs (mV/mA depending on channel)
+    # ADC inputs (mV/mA depending on channel).
+    # NOTE: analog_input0 and analog_input1 are within the fw 1.8.2 response
+    # window.  analog_input2 and analog_input3 are zero-padded on fw 1.8.2
+    # (not read from the hub).
     analog_input0: int
     analog_input1: int
     analog_input2: int
     analog_input3: int
 
-    # Current monitors (mA)
-    gpio_current_ma: int
-    i2c_current_ma: int
-    servo_current_ma: int
-    battery_current_ma: int
-    motor0_current_ma: int
-    motor1_current_ma: int
-    motor2_current_ma: int
-    motor3_current_ma: int
-
-    # Voltage monitors (mV)
-    mon5v_mv: int
-    battery_voltage_mv: int
-
-    # Servo pulse widths (us)
+    # Servo pulse widths (us) — zero-padded on fw 1.8.2
     servo0_cmd: int
     servo1_cmd: int
     servo2_cmd: int
@@ -116,7 +141,7 @@ class BulkInputData:
     servo4_cmd: int
     servo5_cmd: int
 
-    # Servo frame periods (us)
+    # Servo frame periods (us) — zero-padded on fw 1.8.2
     servo0_frame_period_us: int
     servo1_frame_period_us: int
     servo2_frame_period_us: int
@@ -124,14 +149,14 @@ class BulkInputData:
     servo4_frame_period_us: int
     servo5_frame_period_us: int
 
-    # I2C block read data (10 bytes each)
+    # I2C block read data (10 bytes each) — zero-padded on fw 1.8.2
     i2c0_data: bytes
     i2c1_data: bytes
     i2c2_data: bytes
     i2c3_data: bytes
     imu_block: bytes
 
-    # I2C status bytes
+    # I2C status bytes — zero-padded on fw 1.8.2
     i2c0_status: int
     i2c1_status: int
     i2c2_status: int
@@ -139,6 +164,7 @@ class BulkInputData:
     imu_status: int
 
     # Monotonic timestamp (vendor typo: "mototonicTime" in JSON)
+    # Zero-padded on fw 1.8.2
     monotonic_time_ms: int
 
     @classmethod
@@ -191,18 +217,11 @@ class BulkInputData:
             motor3_mode=_u8(rsp.get("motor3mode", 0)),
             analog_input0=_u16(rsp.get("analogInput0", 0)),
             analog_input1=_u16(rsp.get("analogInput1", 0)),
+            # analog_input2/3 are beyond the fw 1.8.2 response window (offset 34)
+            # and will read as 0 when the tolerant padding path is used.
             analog_input2=_u16(rsp.get("analogInput2", 0)),
             analog_input3=_u16(rsp.get("analogInput3", 0)),
-            gpio_current_ma=_u16(rsp.get("gpioCurrent_mA", 0)),
-            i2c_current_ma=_u16(rsp.get("i2cCurrent_mA", 0)),
-            servo_current_ma=_u16(rsp.get("servoCurrent_mA", 0)),
-            battery_current_ma=_u16(rsp.get("batteryCurrent_mA", 0)),
-            motor0_current_ma=_u16(rsp.get("motor0current_mA", 0)),
-            motor1_current_ma=_u16(rsp.get("motor1current_mA", 0)),
-            motor2_current_ma=_u16(rsp.get("motor2current_mA", 0)),
-            motor3_current_ma=_u16(rsp.get("motor3current_mA", 0)),
-            mon5v_mv=_u16(rsp.get("mon5v_mV", 0)),
-            battery_voltage_mv=_u16(rsp.get("batteryVoltage_mV", 0)),
+            # Servo, I2C, and timestamp fields are zero-padded on fw 1.8.2.
             servo0_cmd=_u16(rsp.get("servo0cmd", 0)),
             servo1_cmd=_u16(rsp.get("servo1cmd", 0)),
             servo2_cmd=_u16(rsp.get("servo2cmd", 0)),

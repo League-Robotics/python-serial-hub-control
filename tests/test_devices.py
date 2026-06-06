@@ -863,3 +863,254 @@ class TestSessionPayloadByteExact:
 
         assert isinstance(result, bool)
         assert result is True
+
+
+# ===========================================================================
+# Motor.get_current_ma — 003-006
+# ===========================================================================
+
+
+class TestMotorGetCurrentMa:
+    """Motor.get_current_ma() reads from GetADC(ADC_Motor0 + channel)."""
+
+    def test_channel0_reads_adc_motor0(self) -> None:
+        """Motor ch 0 issues GetADC for channel 8 (ADC_Motor0)."""
+        transport, hub, session = _make_session()
+        hub.set_rsp("GetADC", adcValue=3)
+        motor = Motor(session, channel=0, address=1)
+        hub.run_in_thread()
+        try:
+            result = motor.get_current_ma()
+        finally:
+            hub.stop()
+
+        # Verify the GetADC request used adcChannel=8 (ADC_Motor0).
+        # GetADC = DEKA 0x07.
+        adc_reqs = [r for r in hub.requests if r.packet_type == _DEKA_BASE + 0x07]
+        assert len(adc_reqs) == 1
+        # payload[0] = adcChannel, payload[1] = rawMode
+        assert adc_reqs[0].payload[0] == 8  # ADC_Motor0
+        assert adc_reqs[0].payload[1] == 0  # engineering units
+        assert isinstance(result, int)
+        assert result == 3
+
+    def test_channel1_reads_adc_motor1(self) -> None:
+        """Motor ch 1 issues GetADC for channel 9 (ADC_Motor1)."""
+        transport, hub, session = _make_session()
+        hub.set_rsp("GetADC", adcValue=5)
+        motor = Motor(session, channel=1, address=1)
+        hub.run_in_thread()
+        try:
+            result = motor.get_current_ma()
+        finally:
+            hub.stop()
+
+        adc_reqs = [r for r in hub.requests if r.packet_type == _DEKA_BASE + 0x07]
+        assert adc_reqs[0].payload[0] == 9  # ADC_Motor1
+        assert result == 5
+
+    def test_channel2_reads_adc_motor2(self) -> None:
+        """Motor ch 2 issues GetADC for channel 10 (ADC_Motor2)."""
+        transport, hub, session = _make_session()
+        hub.set_rsp("GetADC", adcValue=0)
+        motor = Motor(session, channel=2, address=1)
+        hub.run_in_thread()
+        try:
+            motor.get_current_ma()
+        finally:
+            hub.stop()
+
+        adc_reqs = [r for r in hub.requests if r.packet_type == _DEKA_BASE + 0x07]
+        assert adc_reqs[0].payload[0] == 10  # ADC_Motor2
+
+    def test_channel3_reads_adc_motor3(self) -> None:
+        """Motor ch 3 issues GetADC for channel 11 (ADC_Motor3)."""
+        transport, hub, session = _make_session()
+        hub.set_rsp("GetADC", adcValue=2)
+        motor = Motor(session, channel=3, address=1)
+        hub.run_in_thread()
+        try:
+            result = motor.get_current_ma()
+        finally:
+            hub.stop()
+
+        adc_reqs = [r for r in hub.requests if r.packet_type == _DEKA_BASE + 0x07]
+        assert adc_reqs[0].payload[0] == 11  # ADC_Motor3
+        assert result == 2
+
+    def test_returns_int(self) -> None:
+        """get_current_ma() always returns a plain int."""
+        transport, hub, session = _make_session()
+        hub.set_rsp("GetADC", adcValue=42)
+        motor = Motor(session, channel=0, address=1)
+        hub.run_in_thread()
+        try:
+            result = motor.get_current_ma()
+        finally:
+            hub.stop()
+
+        assert type(result) is int
+
+
+# ===========================================================================
+# Hub.battery_voltage_mv and Hub.battery_current_ma — 003-006
+# ===========================================================================
+
+
+class TestHubBatteryGetters:
+    """Hub battery voltage and current helpers read from the correct ADC channels."""
+
+    def _make_hub_obj(
+        self, *, adc_value: int = 0
+    ) -> tuple[LoopbackTransport, "FakeHub", Session, object]:
+        """Return (transport, fake_hub, session, hub) with FakeHub running."""
+        from rhsp.hub import Hub
+
+        transport, fake, session = _make_session()
+        fake.set_rsp("GetADC", adcValue=adc_value)
+        hub = Hub(session=session, address=1)
+        fake.run_in_thread()
+        return transport, fake, session, hub
+
+    def test_battery_voltage_mv_reads_adc_channel_13(self) -> None:
+        """Hub.battery_voltage_mv() issues GetADC for channel 13 (ADC_BatteryMonitor)."""
+        from rhsp.hub import Hub
+
+        transport, fake, session = _make_session()
+        fake.set_rsp("GetADC", adcValue=11934)
+        hub = Hub(session=session, address=1)
+        fake.run_in_thread()
+        try:
+            result = hub.battery_voltage_mv()
+        finally:
+            fake.stop()
+
+        adc_reqs = [r for r in fake.requests if r.packet_type == _DEKA_BASE + 0x07]
+        assert len(adc_reqs) == 1
+        assert adc_reqs[0].payload[0] == 13  # ADC_BatteryMonitor
+        assert adc_reqs[0].payload[1] == 0   # engineering units
+        assert isinstance(result, int)
+        assert result == 11934
+
+    def test_battery_current_ma_reads_adc_channel_7(self) -> None:
+        """Hub.battery_current_ma() issues GetADC for channel 7 (ADC_Battery)."""
+        from rhsp.hub import Hub
+
+        transport, fake, session = _make_session()
+        fake.set_rsp("GetADC", adcValue=0)
+        hub = Hub(session=session, address=1)
+        fake.run_in_thread()
+        try:
+            result = hub.battery_current_ma()
+        finally:
+            fake.stop()
+
+        adc_reqs = [r for r in fake.requests if r.packet_type == _DEKA_BASE + 0x07]
+        assert len(adc_reqs) == 1
+        assert adc_reqs[0].payload[0] == 7  # ADC_Battery
+        assert isinstance(result, int)
+        assert result == 0
+
+    def test_battery_voltage_mv_returns_int(self) -> None:
+        """battery_voltage_mv() always returns a plain int."""
+        from rhsp.hub import Hub
+
+        transport, fake, session = _make_session()
+        fake.set_rsp("GetADC", adcValue=12100)
+        hub = Hub(session=session, address=1)
+        fake.run_in_thread()
+        try:
+            result = hub.battery_voltage_mv()
+        finally:
+            fake.stop()
+
+        assert type(result) is int
+        assert result == 12100
+
+    def test_battery_current_ma_returns_int(self) -> None:
+        """battery_current_ma() always returns a plain int."""
+        from rhsp.hub import Hub
+
+        transport, fake, session = _make_session()
+        fake.set_rsp("GetADC", adcValue=150)
+        hub = Hub(session=session, address=1)
+        fake.run_in_thread()
+        try:
+            result = hub.battery_current_ma()
+        finally:
+            fake.stop()
+
+        assert type(result) is int
+        assert result == 150
+
+
+# ===========================================================================
+# BulkInputData — current/voltage fields removed (003-006)
+# ===========================================================================
+
+
+class TestBulkCurrentVoltageFieldsRemoved:
+    """Confirm that removed current/voltage fields are no longer on BulkInputData."""
+
+    def test_motor_current_ma_attributes_absent(self) -> None:
+        """motor*_current_ma attributes must not exist on BulkInputData."""
+        from rhsp.devices.bulk import BulkInputData
+
+        bulk = BulkInputData.from_response({})
+        for ch in range(4):
+            assert not hasattr(bulk, f"motor{ch}_current_ma"), (
+                f"motor{ch}_current_ma must have been removed from BulkInputData"
+            )
+
+    def test_battery_voltage_mv_attribute_absent(self) -> None:
+        """battery_voltage_mv must not exist on BulkInputData."""
+        from rhsp.devices.bulk import BulkInputData
+
+        bulk = BulkInputData.from_response({})
+        assert not hasattr(bulk, "battery_voltage_mv")
+
+    def test_battery_current_ma_attribute_absent(self) -> None:
+        """battery_current_ma must not exist on BulkInputData."""
+        from rhsp.devices.bulk import BulkInputData
+
+        bulk = BulkInputData.from_response({})
+        assert not hasattr(bulk, "battery_current_ma")
+
+    def test_mon5v_mv_attribute_absent(self) -> None:
+        """mon5v_mv must not exist on BulkInputData."""
+        from rhsp.devices.bulk import BulkInputData
+
+        bulk = BulkInputData.from_response({})
+        assert not hasattr(bulk, "mon5v_mv")
+
+    def test_bulk_input_data_still_decodes_encoders_velocities_modes(self) -> None:
+        """BulkInputData.from_response still correctly decodes encoders, velocities, and modes."""
+        from rhsp.devices.bulk import BulkInputData
+
+        rsp = {
+            "digitalInputs": 0b10101010,
+            "motor0Encoder": 0xFFFFFFFF,  # -1 signed
+            "motor1Encoder": 1000,
+            "motor2Encoder": 0,
+            "motor3Encoder": -500,
+            "motorStatus": 0,
+            "motor0Velocity": 0xFFFE,  # -2 signed
+            "motor1Velocity": 300,
+            "motor2Velocity": 0,
+            "motor3Velocity": 0,
+            "motor0mode": 1,
+            "motor1mode": 0,
+            "motor2mode": 0,
+            "motor3mode": 0,
+            "analogInput0": 3300,
+            "analogInput1": 0,
+        }
+        bulk = BulkInputData.from_response(rsp)
+
+        assert bulk.digital_inputs == 0b10101010
+        assert bulk.motor0_encoder == -1
+        assert bulk.motor1_encoder == 1000
+        assert bulk.motor0_velocity == -2
+        assert bulk.motor1_velocity == 300
+        assert bulk.motor0_mode == 1
+        assert bulk.analog_input0 == 3300
