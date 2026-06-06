@@ -2972,6 +2972,281 @@ class TestRatioDrivePlateauLatch:
         assert not rd.saturated, "rd.saturated must be False after spontaneous recovery"
 
 
+class TestRatioDriveLatchHardening:
+    """003-010 bug-fix: regression tests for the hardened max-speed latch.
+
+    Hardware finding: when current_limit_ma is set, the daemon thread's slower
+    loop (extra GetADC calls) causes coarser velocity sampling.  During spin-up
+    a single sample may momentarily read v=0 (encoder transient) while
+    _ever_accelerating is already True.  The old single-sample plateau test
+    would latch at cap=0, pinning g=0 permanently.
+
+    The hardened latch requires:
+      1. The plateau condition must persist for _latch_persist_ticks consecutive
+         ticks (default 3) — one noisy sample cannot fire it.
+      2. The would-be cap must be >= min_latch_frac * g (default 0.25) — a
+         near-zero cap is a spin-up transient, not a genuine physical ceiling.
+    """
+
+    def test_no_latch_on_single_zero_velocity_sample(self) -> None:
+        """A single v=0 reading while _ever_accelerating is True must NOT latch.
+
+        This is the exact failure mode found on hardware: spin-up with
+        current_limit_ma set, v bounces 0→260 cnt/s, one sample hits 0,
+        old code latched cap=0 and g=0 forever.
+        """
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        dt_ms = 20
+
+        rd, _, _ = _make_ratio_drive_010(
+            weights,
+            target_scale=S,
+            max_accel=100000.0,
+            plateau_threshold_cnts_s2=150.0,
+        )
+        rd._scale = 60.0  # g partway through spin-up
+
+        # Manually put motor 0 into the "ever_accelerating" state
+        # (as would happen after the first real ticks of spin-up).
+        rd._ever_accelerating[0] = True
+        rd._ever_accelerating[1] = True
+        # Set dvdt_ema below threshold (motor appears to have just plateaued)
+        rd._dvdt_ema[0] = 0.0
+        rd._dvdt_ema[1] = 0.0
+        # Set vel_ema to a small value (below commanded scale=60)
+        rd._vel_ema[0] = 0.0
+        rd._vel_ema[1] = 0.0
+
+        # Feed a single tick with v=0 (the transient that caused the bug).
+        # With g=60 and v=0: shortfall=60, is_short=True, is_plateau=True.
+        # Old code: would latch at cap_val=0 immediately (one tick).
+        # New code: persistence counter reaches 1, need 3 → no latch yet.
+        time_ms = 300
+        bulk = _make_bulk_timed(motor0_velocity=0, motor1_velocity=0, time_ms=time_ms)
+        rd.update(bulk)
+
+        # After a single zero-velocity tick: NO latch should have fired.
+        assert rd._speed_latch.get(0) is None, (
+            "Latch must NOT fire on a single zero-velocity sample (spin-up transient)"
+        )
+        assert rd._speed_latch.get(1) is None, (
+            "Latch must NOT fire on a single zero-velocity sample (spin-up transient)"
+        )
+        assert not rd.saturated, "g must not be pinned at 0 by a single zero-velocity tick"
+        # g must still be positive — not collapsed to 0.
+        assert rd.scale > 0.0, (
+            f"g collapsed to 0 after single zero-velocity tick: {rd.scale}"
+        )
+
+    def test_no_latch_when_cap_near_zero(self) -> None:
+        """Even after persistence, a near-zero would-be cap must NOT latch.
+
+        Protect against the case where several consecutive noise samples all
+        read 0 (v_i very small) but g is well above 0.  min_latch_frac * g
+        guard prevents latching at implausibly low ceilings.
+        """
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        dt_ms = 20
+
+        rd, _, _ = _make_ratio_drive_010(
+            weights,
+            target_scale=S,
+            max_accel=100000.0,
+            plateau_threshold_cnts_s2=150.0,
+        )
+        rd._scale = 200.0  # g at 200, well above 0
+
+        # Pre-seed: both motors ever_accelerating, dvdt_ema below threshold.
+        rd._ever_accelerating[0] = True
+        rd._ever_accelerating[1] = True
+        rd._dvdt_ema[0] = 0.0
+        rd._dvdt_ema[1] = 0.0
+        rd._vel_ema[0] = 0.0
+        rd._vel_ema[1] = 0.0
+
+        # Feed _latch_persist_ticks consecutive ticks with v=0.
+        # Each tick: cap_val=0 < min_latch_frac * g=50 → latch must NOT fire.
+        time_ms = 300
+        for _ in range(rd._latch_persist_ticks + 5):
+            time_ms += dt_ms
+            bulk = _make_bulk_timed(motor0_velocity=0, motor1_velocity=0, time_ms=time_ms)
+            rd.update(bulk)
+
+        # Even after _latch_persist_ticks zero-velocity ticks: NO latch, because
+        # cap_val=0 < min_latch_frac * g.
+        assert rd._speed_latch.get(0) is None, (
+            f"Latch must not fire when cap ≈ 0 << g={rd.scale:.0f} (min_latch_frac guard)"
+        )
+        assert rd._speed_latch.get(1) is None, (
+            f"Latch must not fire when cap ≈ 0 << g={rd.scale:.0f} (min_latch_frac guard)"
+        )
+        assert not rd.saturated
+
+    def test_transient_zero_then_ramp_keeps_climbing(self) -> None:
+        """Spin-up scenario: one transient v=0 tick in the middle does NOT interrupt ramp.
+
+        Simulates the thread-driven failure case: g starts from 0, both wheels
+        accelerate, a single tick reads v=0 (noise), then acceleration resumes.
+        g must keep climbing to S — not be stuck at 0.
+        """
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        dt_ms = 20
+
+        rd, _, _ = _make_ratio_drive_010(
+            weights,
+            target_scale=S,
+            max_accel=100000.0,   # very fast slew so g can reach S quickly
+            plateau_threshold_cnts_s2=150.0,
+        )
+
+        time_ms = 0
+
+        # Phase 1: normal spin-up — both wheels accelerating (v ≈ 0.7 * g).
+        # This sets _ever_accelerating = True via growing vel_ema dv/dt.
+        for _ in range(8):
+            time_ms += dt_ms
+            g = rd.scale
+            v = round(0.7 * g) if g > 30 else 0
+            bulk = _make_bulk_timed(motor0_velocity=v, motor1_velocity=v, time_ms=time_ms)
+            rd.update(bulk)
+
+        g_before_transient = rd.scale
+        assert g_before_transient > 0.0, "g should have risen during spin-up"
+
+        # Phase 2: ONE tick with v=0 (the transient).
+        time_ms += dt_ms
+        bulk = _make_bulk_timed(motor0_velocity=0, motor1_velocity=0, time_ms=time_ms)
+        rd.update(bulk)
+
+        # Latch must NOT have fired.
+        assert rd._speed_latch.get(0) is None, "Latch must not fire on transient zero"
+        assert rd._speed_latch.get(1) is None, "Latch must not fire on transient zero"
+
+        # Phase 3: resume normal spin-up.
+        for _ in range(30):
+            time_ms += dt_ms
+            g = rd.scale
+            v = round(0.9 * g)
+            bulk = _make_bulk_timed(motor0_velocity=v, motor1_velocity=v, time_ms=time_ms)
+            rd.update(bulk)
+
+        # g must have kept climbing — not stuck at 0 or near the transient value.
+        # With default recovery_accel_up=500 at 50 Hz: 10 cnt/tick.
+        # Starting from g≈80 after 30 ticks: 80 + 300 = 380 → expect > 200.
+        # The key invariant: g must NOT be stuck at 0 or near the transient.
+        final_g = rd.scale
+        assert final_g > 200.0, (
+            f"g should have climbed well above 0 after spin-up; got {final_g:.1f}. "
+            f"A transient v=0 collapsed g."
+        )
+        assert rd._speed_latch.get(0) is None, "No latch after clean ramp"
+        assert rd._speed_latch.get(1) is None, "No latch after clean ramp"
+
+    def test_genuine_sustained_high_plateau_still_latches(self) -> None:
+        """A genuine sustained plateau at a high speed (≥ min_latch_frac * g) still latches.
+
+        Regression check: the hardening must not prevent legitimate ceiling detection.
+        Scenario analogous to ratio-5.0 hardware: motor 1 tops out at normalised ~500
+        while g is commanded 1000.  After _latch_persist_ticks consecutive ticks at
+        n1=500, the latch must fire at cap≈500 (well above min_latch_frac*1000=250).
+        """
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        n1_max = 500  # motor 1 physical ceiling (normalised)
+        dt_ms = 20
+
+        rd, _, _ = _make_ratio_drive_010(
+            weights,
+            target_scale=S,
+            max_accel=100000.0,
+            plateau_threshold_cnts_s2=150.0,
+        )
+        rd._scale = S  # start at full speed
+
+        time_ms = 0
+
+        # Run until the latch fires (generous number of ticks for EMA to settle).
+        for _ in range(80):
+            time_ms += dt_ms
+            bulk = _make_bulk_timed(motor0_velocity=round(S), motor1_velocity=n1_max, time_ms=time_ms)
+            rd.update(bulk)
+
+        # Latch must have fired at cap ≈ n1_max (500 >> 0.25 * 1000 = 250 ✓).
+        latch_cap = rd._speed_latch.get(1)
+        assert latch_cap is not None, (
+            "Speed latch must fire for a genuine sustained plateau at n1_max=500 "
+            f"(min_latch_frac * g = {rd._min_latch_frac * rd.scale:.0f}). "
+            f"dvdt_ema={rd._dvdt_ema}, speed_latch={rd._speed_latch}"
+        )
+        assert abs(latch_cap - n1_max) <= 100, (
+            f"Latch cap should be near n1_max={n1_max}; got {latch_cap:.1f}"
+        )
+        assert rd.saturated
+        # g must have dropped to near the cap.
+        assert rd.scale <= n1_max + 20, (
+            f"g should have converged to latch cap {n1_max}; got {rd.scale:.1f}"
+        )
+
+    def test_latch_persist_ticks_fires_after_required_duration(self) -> None:
+        """Latch fires only after _latch_persist_ticks consecutive plateau ticks.
+
+        Verify the boundary: at tick (persist-1) no latch; at tick persist the latch fires.
+        Uses a high g (800) and n_i = 0.5*g = 400, which is well above
+        min_latch_frac*g = 200 so the minimum-cap guard doesn't interfere.
+        """
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        dt_ms = 20
+        persist = 3  # default latch_persist_ticks
+
+        rd, _, _ = _make_ratio_drive_010(
+            weights,
+            target_scale=S,
+            max_accel=100000.0,
+            plateau_threshold_cnts_s2=150.0,
+        )
+        rd._scale = 800.0  # start g high so min_latch_frac check is not the bottleneck
+
+        # Pre-seed: both motors ever_accelerating with flat dvdt_ema below threshold.
+        rd._ever_accelerating[0] = True
+        rd._ever_accelerating[1] = True
+        rd._dvdt_ema[0] = 0.0
+        rd._dvdt_ema[1] = 0.0
+        # Seed vel_ema at 400 (= 0.5 * g) so dv/dt remains ~0 across ticks.
+        rd._vel_ema[0] = 400.0
+        rd._vel_ema[1] = 400.0
+
+        time_ms = 400
+
+        # Feed (persist - 1) ticks at v = 400 (shortfall = 800-400=400 = 50% > 15% margin).
+        # dvdt_ema will remain near 0 because v is constant.
+        for tick in range(persist - 1):
+            time_ms += dt_ms
+            bulk = _make_bulk_timed(motor0_velocity=400, motor1_velocity=400, time_ms=time_ms)
+            rd.update(bulk)
+            # Must not have latched yet.
+            assert rd._speed_latch.get(1) is None, (
+                f"Latch fired too early at tick {tick+1} (need {persist} consecutive ticks)"
+            )
+
+        # Feed one more tick — this is tick #persist → latch should fire NOW.
+        time_ms += dt_ms
+        bulk = _make_bulk_timed(motor0_velocity=400, motor1_velocity=400, time_ms=time_ms)
+        rd.update(bulk)
+
+        latch = rd._speed_latch.get(1)
+        assert latch is not None, (
+            f"Latch should fire after exactly {persist} consecutive plateau ticks; "
+            f"plateau_ticks={rd._plateau_ticks}, dvdt_ema={rd._dvdt_ema}"
+        )
+        assert abs(latch - 400.0) < 50, (
+            f"Latch cap should be near 400 (the sustained plateau velocity); got {latch:.1f}"
+        )
+
+
 class TestRatioDriveCurrentCapNew:
     """003-010: Live current closed-loop cap — correct recovery behavior."""
 

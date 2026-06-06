@@ -1,7 +1,7 @@
 ---
 id: 003-010
 title: 'Unified RatioDrive governor: two-cap design (sticky max-speed + live current)'
-status: done
+status: in-progress
 use-cases:
 - SUC-002
 - SUC-003
@@ -147,6 +147,16 @@ New tunables (`plateau_threshold_cnts_s2`, `ema_alpha`, `speed_margin_frac`,
   g climbed steadily from 10 to 1000 cnt/s over ~100 ticks. No latches fired.
   Both v0 and v1 tracked g throughout. No overshoot. No oscillation. PASS.
 
+  **Bug-fix re-validation (003-010 false-latch fix, ratio 1.0 --current-limit 1500):**
+  Previously failing: g collapsed to 0 at t≈0.45 s via false latch at cap=0.
+  After hardening: g climbed steadily 30→900 cnt/s over 30 samples (6 s) with
+  no latch firing. Both motors tracked g throughout. No collapse. PASS.
+  Trace (200 ms polling, 30 samples):
+  t=0.0s g=30 v0=0 v1=0; t=0.4s g=90 v0=0 v1=80; t=1.0s g=180 v0=160 v1=180;
+  t=2.0s g=330 v0=320 v1=300; t=3.0s g=480 v0=460 v1=480;
+  t=4.0s g=630 v0=620 v1=620; t=5.0s g=780 v0=760 v1=760;
+  t=5.8s g=900 v0=860 v1=880. No latch. PASS.
+
 - [x] **Ratio 5.0 — no overshoot, no limit cycle**: `RatioDrive(hub,
   {0:1.0, 1:5.0}); set_speed(1000)`. g settles near the bottleneck (~500 for
   this rig) WITHOUT the prior large overshoot to ~1000 (plateau-based latch
@@ -164,6 +174,13 @@ New tunables (`plateau_threshold_cnts_s2`, `ema_alpha`, `speed_margin_frac`,
 
   **Hysteresis fix**: latch clear threshold raised to `latch * (1 + speed_margin_frac)`
   (= `latch * 1.15`) to prevent ±20 cnt noise from triggering false clears.
+
+  **Bug-fix re-validation (003-010 false-latch fix):**
+  g climbed 30→600 cnt/s, latch fired at g=488 (v1=2440, n1=488) at t≈3.4s.
+  g held stable at 488 for ticks t=3.4–5.8s. No limit cycle. No false latch.
+  Trace (200 ms polling):
+  t=0.0s g=30; t=1.0s g=200 v1=880; t=2.0s g=380 v1=1720; t=3.0s g=560 v1=2440;
+  t=3.4s g=488 (LATCH); t=3.6–5.8s g=488 stable. PASS.
 
 - [ ] **Load de-rate + recovery (ratio 1.0, current_limit set) — operator
   assisted**: `RatioDrive(hub, {0:1.0, 1:1.0}, current_limit_ma=<limit>);
@@ -223,8 +240,16 @@ New tunables (`plateau_threshold_cnts_s2`, `ema_alpha`, `speed_margin_frac`,
   expectations must be documented with an inline comment explaining why the
   old behavior is no longer expected.
 
-- [x] **Full suite green**: `uv run pytest` exits 0 (592 → 611 tests; 19 new
-  tests added in `TestRatioDrivePlateauLatch`, `TestRatioDriveCurrentCapNew`,
+- [x] **False-latch regression tests**: `TestRatioDriveLatchHardening` (5 new
+  tests): (a) single v=0 sample with ever_accelerating True must NOT latch;
+  (b) near-zero cap (below min_latch_frac * g) never latches even after
+  persist ticks; (c) transient zero in spin-up does not collapse g; (d)
+  genuine sustained high plateau at n1=500 still latches correctly; (e)
+  latch fires only after exactly _latch_persist_ticks consecutive ticks.
+
+- [x] **Full suite green**: `uv run pytest` exits 0 (611 → 616 tests; 5
+  additional false-latch regression tests in `TestRatioDriveLatchHardening`;
+  previously 19 new tests added in `TestRatioDrivePlateauLatch`, `TestRatioDriveCurrentCapNew`,
   `TestRatioDriveRatioExactnessNew`, `TestRatioDriveNewTunableDefaults`).
 
 ## Testing

@@ -345,6 +345,17 @@ class RatioDrive:
                            takes approximately 1 second.  Default 500 counts/s²
                            (500 counts/s per second → ~2 s for a 1000 count/s
                            climb at 50 Hz).
+        latch_persist_ticks: Number of consecutive ticks the plateau condition
+                           must hold before the speed latch fires.  This prevents
+                           a single noisy velocity sample (e.g. a transient 0
+                           during spin-up under the daemon thread) from misfiring
+                           the latch.  Default 3 (60 ms at 50 Hz).
+        min_latch_frac:    Minimum cap value as a fraction of the current ``g``
+                           for a latch to fire.  A would-be cap below
+                           ``min_latch_frac * g`` is a sign of spin-up noise or
+                           a momentary encoder transient, not a genuine physical
+                           ceiling.  Default 0.25 (cap must be at least 25% of
+                           the current commanded scale).
 
     Deprecated / superseded parameters (accepted but ignored):
         sat_margin, sat_release_margin, sat_settle_s: replaced by the dv/dt
@@ -377,6 +388,8 @@ class RatioDrive:
         plateau_threshold_cnts_s2: float = 150.0,
         speed_margin_frac: float = 0.15,
         recovery_accel_up: float | None = None,
+        latch_persist_ticks: int = 3,
+        min_latch_frac: float = 0.25,
     ) -> None:
         self._hub = hub
         self._rate_hz = rate_hz
@@ -391,6 +404,13 @@ class RatioDrive:
         self._ema_alpha: float = ema_alpha
         self._plateau_threshold: float = plateau_threshold_cnts_s2
         self._speed_margin_frac: float = speed_margin_frac
+        # Latch-hardening tunables (003-010 bug fix):
+        # A plateau must persist this many consecutive ticks before the latch fires,
+        # preventing a single noisy sample from misfiring it.
+        self._latch_persist_ticks: int = latch_persist_ticks
+        # A would-be cap below min_latch_frac * g is a spin-up transient, not a
+        # genuine physical ceiling.  Prevents g from being pinned near 0.
+        self._min_latch_frac: float = min_latch_frac
         # Upward recovery slew rate: recovery_accel_up > recovery_accel > max_accel fallback.
         if recovery_accel_up is not None:
             self._recovery_accel_up: float = recovery_accel_up
@@ -430,6 +450,11 @@ class RatioDrive:
         # (v=0 because the motor hasn't responded yet) from being mistaken for a
         # genuine saturation plateau.
         self._ever_accelerating: dict[int, bool] = {}
+        # Per-wheel consecutive-tick counter for plateau persistence.
+        # Counts how many consecutive ticks the plateau condition (shortfall + low dv/dt)
+        # has been continuously satisfied.  Latch fires only when this reaches
+        # _latch_persist_ticks, preventing a single noisy sample from misfiring.
+        self._plateau_ticks: dict[int, int] = {}
 
         # ---------------------------------------------------------------
         # Current-limit governor (opt-in via current_limit_ma).
@@ -481,6 +506,8 @@ class RatioDrive:
         self._ever_accelerating = {ch: False for ch in self._ever_accelerating}
         self._vel_ema = {}
         self._dvdt_ema = {}
+        # Reset plateau persistence counters so the new setpoint has a clean window.
+        self._plateau_ticks = {}
         # Update the cached saturated flag immediately so callers see the cleared state.
         self._saturated = False
 
@@ -537,6 +564,7 @@ class RatioDrive:
             self._ever_accelerating = {}
             self._vel_ema = {}
             self._dvdt_ema = {}
+            self._plateau_ticks = {}
             self._saturated = False
 
     def set_ratio(self, ratio: float, pair: tuple[int, int] = (0, 1)) -> None:
@@ -562,6 +590,7 @@ class RatioDrive:
             self._ever_accelerating = {}
             self._vel_ema = {}
             self._dvdt_ema = {}
+            self._plateau_ticks = {}
             self._saturated = False
 
     def stop(self, brake: bool = False) -> None:
@@ -803,17 +832,41 @@ class RatioDrive:
                     clear_threshold = current_latch * (1.0 + self._speed_margin_frac)
                     if n_i > clear_threshold:
                         self._speed_latch[ch] = None
+                        self._plateau_ticks[ch] = 0  # reset persistence on clear
                     # (else: stay latched)
                 else:
                     # Not latched: check whether to latch.
                     # Require: wheel has previously accelerated (not first-tick zero lag),
                     # is currently below commanded target by margin, and has stopped
                     # accelerating (dv/dt below plateau threshold).
+                    #
+                    # HARDENED LATCH (003-010 bug fix):
+                    # 1. Persistence: plateau condition must hold for _latch_persist_ticks
+                    #    consecutive ticks before latching.  A single noisy sample (e.g.
+                    #    a transient v=0 during spin-up on the daemon thread) resets the
+                    #    counter and cannot fire the latch.
+                    # 2. Minimum cap guard: the would-be cap must be at least
+                    #    min_latch_frac * g.  A near-zero cap signals spin-up noise or
+                    #    encoder dropout, not a genuine physical speed ceiling.
                     if ever_accel and is_short and is_plateau and commanded_n > _EPSILON:
-                        # Wheel has plateaued below its commanded target — latch the cap.
-                        # Use n_i as the cap (normalised speed the wheel can sustain at g).
+                        # Plateau condition holds this tick — increment persistence counter.
+                        self._plateau_ticks[ch] = self._plateau_ticks.get(ch, 0) + 1
+                        # Check if the plateau has persisted long enough AND the
+                        # would-be cap is plausibly high (not a spin-up transient).
                         cap_val = max(n_i, 0.0)  # don't latch negative caps
-                        self._speed_latch[ch] = cap_val
+                        min_valid_cap = self._min_latch_frac * max(g, _EPSILON)
+                        if (
+                            self._plateau_ticks[ch] >= self._latch_persist_ticks
+                            and cap_val >= min_valid_cap
+                        ):
+                            # Genuine sustained plateau at a plausible speed — latch.
+                            self._speed_latch[ch] = cap_val
+                            self._plateau_ticks[ch] = 0  # reset after firing
+                    else:
+                        # Plateau condition NOT met — reset persistence counter.
+                        # A single non-plateau tick (e.g. motor accelerating again)
+                        # cancels any in-progress latch build-up.
+                        self._plateau_ticks[ch] = 0
 
             # Effective sticky max-speed cap: min of all latched values, or S.
             latched_caps = [v for v in self._speed_latch.values() if v is not None]
