@@ -13,6 +13,11 @@ Usage::
 
     uv run --extra bench python examples/velocity_chart.py [--port DEV] [--speed N] \\
         [--channels A,B] [--ratio R] [--window S] [--vmax V] [--rate HZ]
+
+Axis scaling:
+  Each strip chart and each phase-plot axis scales independently to fit its
+  own visible data plus the commanded setpoint.  Pass ``--vmax`` to cap the
+  auto-scaled half-span at a fixed value (useful for reproducible screenshots).
 """
 
 from __future__ import annotations
@@ -87,7 +92,13 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         metavar="V",
-        help="Y-axis limit in counts/s. Defaults to max(1.5 * speed, 100).",
+        help=(
+            "Cap on the auto-scaled y-axis half-span (counts/s). "
+            "When supplied, this value acts as a ceiling: the auto-scaler grows "
+            "axes to fit data/setpoints but never beyond --vmax. "
+            "When omitted, axes scale freely to fit whatever data arrives. "
+            "Precedence: explicit --vmax always wins over auto-scale."
+        ),
     )
     p.add_argument(
         "--rate",
@@ -110,6 +121,43 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     return p.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Axis-scaling helpers
+# ---------------------------------------------------------------------------
+
+
+def _fit_limit(
+    values: "deque[int] | list[float]",
+    setpoint: float,
+    margin: float = 0.15,
+    floor: float = 50.0,
+    vmax_cap: float | None = None,
+) -> float:
+    """Return a symmetric half-span for a velocity axis.
+
+    The result is ``max(max(|values|), |setpoint|, floor) * (1 + margin)``.
+    When *vmax_cap* is not None it acts as a ceiling: the returned value is
+    clamped to ``vmax_cap`` from above.  This is the ``--vmax`` override path.
+
+    Parameters
+    ----------
+    values:    Iterable of measured velocities currently visible in the window.
+               May be empty (e.g. before any data arrives).
+    setpoint:  Commanded velocity for this channel (used as a minimum span).
+    margin:    Fractional headroom added above the largest absolute value.
+               Default 0.15 gives 15% headroom.
+    floor:     Minimum half-span, preventing the axis from collapsing to zero
+               when the motor is stopped.  Default 50 cnt/s.
+    vmax_cap:  If not None, caps the returned value at this ceiling.
+               Explicit ``--vmax`` passes this parameter; auto-scale omits it.
+    """
+    max_abs_data = max((abs(v) for v in values), default=0.0)
+    raw = max(max_abs_data, abs(setpoint), floor) * (1.0 + margin)
+    if vmax_cap is not None:
+        raw = min(raw, float(vmax_cap))
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +249,9 @@ def main() -> int:  # noqa: C901
         return 1
 
     # --- Resolve vmax ---------------------------------------------------------
-    vmax: float = args.vmax if args.vmax is not None else max(1.5 * args.speed, 100.0)
+    # vmax_cap is None when the user did NOT pass --vmax (auto-scale freely).
+    # When supplied, it caps the auto-scaled half-span from above.
+    vmax_cap: float | None = args.vmax  # None → unconstrained auto-scale
 
     # --- Fail-fast: no hub and no port given ----------------------------------
     port: str | None = args.port
@@ -230,13 +280,18 @@ def main() -> int:  # noqa: C901
         fontsize=11,
     )
 
+    # Compute initial axis half-spans from setpoints (no data yet).
+    _sp_a = args.speed
+    _sp_b = round(args.speed * args.ratio)
+    _init_half_a = _fit_limit([], _sp_a, vmax_cap=vmax_cap)
+    _init_half_b = _fit_limit([], _sp_b, vmax_cap=vmax_cap)
+
     # Strip chart — motor A
     ax_a.set_ylabel("velocity (counts/s)", color="white")
     ax_a.set_title(f"Motor {ch_a}", color="white", fontsize=9)
     ax_a.set_xlim(0, args.window)
-    ax_a.set_ylim(-vmax, vmax)
+    ax_a.set_ylim(-_init_half_a, _init_half_a)
     ax_a.axhline(0, color="grey", linewidth=0.5)
-    _sp_a = args.speed
     ax_a.axhline(_sp_a, color="yellow", linewidth=1.0, linestyle="--", label=f"SP {_sp_a}")
     (line_a,) = ax_a.plot([], [], color="cyan", linewidth=1.2)
     ax_a.tick_params(labelbottom=False)
@@ -246,25 +301,26 @@ def main() -> int:  # noqa: C901
     ax_b.set_ylabel("velocity (counts/s)", color="white")
     ax_b.set_title(f"Motor {ch_b}", color="white", fontsize=9)
     ax_b.set_xlim(0, args.window)
-    ax_b.set_ylim(-vmax, vmax)
+    ax_b.set_ylim(-_init_half_b, _init_half_b)
     ax_b.axhline(0, color="grey", linewidth=0.5)
-    _sp_b = round(args.speed * args.ratio)
     ax_b.axhline(_sp_b, color="yellow", linewidth=1.0, linestyle="--", label=f"SP {_sp_b}")
     (line_b,) = ax_b.plot([], [], color="lime", linewidth=1.2)
 
-    # Phase plot
-    ax_phase.set_aspect("equal")
-    ax_phase.set_xlim(-vmax, vmax)
-    ax_phase.set_ylim(-vmax, vmax)
+    # Phase plot — independent x/y limits, no set_aspect("equal").
+    # Initial limits derive from each motor's setpoint independently.
+    ax_phase.set_xlim(-_init_half_a, _init_half_a)
+    ax_phase.set_ylim(-_init_half_b, _init_half_b)
     ax_phase.set_xlabel(f"Motor {ch_a} (counts/s)", color="white")
     ax_phase.set_ylabel(f"Motor {ch_b} (counts/s)", color="white")
     ax_phase.set_title("Phase  vB vs vA", color="white", fontsize=9)
     ax_phase.axhline(0, color="grey", linewidth=0.5)
     ax_phase.axvline(0, color="grey", linewidth=0.5)
-    # Reference line y = ratio * x
-    _ref_x = np.array([-vmax, vmax])
-    ax_phase.plot(_ref_x, args.ratio * _ref_x, color="grey", linewidth=1.0,
-                  linestyle=":", label=f"y={args.ratio:.2f}x")
+    # Reference line y = ratio * x — data updated each frame to span visible xlim.
+    (ref_line,) = ax_phase.plot(
+        [-_init_half_a, _init_half_a],
+        [-_init_half_a * args.ratio, _init_half_a * args.ratio],
+        color="grey", linewidth=1.0, linestyle=":", label=f"y={args.ratio:.2f}x",
+    )
     (phase_trace,) = ax_phase.plot([], [], color="dimgrey", linewidth=0.8, alpha=0.7)
     (phase_dot,) = ax_phase.plot([], [], "ro", markersize=6)
 
@@ -275,6 +331,17 @@ def main() -> int:  # noqa: C901
     buf_t: deque[float] = deque(maxlen=maxlen)
     buf_vA: deque[int] = deque(maxlen=maxlen)
     buf_vB: deque[int] = deque(maxlen=maxlen)
+
+    # --- Hysteresis state for auto-scaling ------------------------------------
+    # Track the current half-span for each axis.  On each frame we only update
+    # the limit when the desired value differs by more than 5% from the current
+    # value — this prevents distracting axis "breathing" when data is steady.
+    half_a: list[float] = [_init_half_a]   # strip-chart motor A
+    half_b: list[float] = [_init_half_b]   # strip-chart motor B
+    half_px: list[float] = [_init_half_a]  # phase-plot x axis (motor A)
+    half_py: list[float] = [_init_half_b]  # phase-plot y axis (motor B)
+
+    _HYSTERESIS = 0.05  # only update when desired differs by more than 5%
 
     # --- Shared queues and worker state ---------------------------------------
     data_queue: queue.Queue[tuple[float, int, int, int, int]] = queue.Queue()
@@ -382,6 +449,35 @@ def main() -> int:  # noqa: C901
         line_b.set_data(t_rel, vB_arr)
         phase_trace.set_data(vA_arr, vB_arr)
         phase_dot.set_data([vA_arr[-1]], [vB_arr[-1]])
+
+        # --- Auto-scale strip charts (each axis independently) ----------------
+        # Desired half-span for motor A: fit visible data + setpoint + margin.
+        desired_a = _fit_limit(buf_vA, _sp_a, vmax_cap=vmax_cap)
+        if abs(desired_a - half_a[0]) / half_a[0] > _HYSTERESIS:
+            half_a[0] = desired_a
+            ax_a.set_ylim(-half_a[0], half_a[0])
+
+        # Desired half-span for motor B: independent — tracks speed*ratio.
+        desired_b = _fit_limit(buf_vB, _sp_b, vmax_cap=vmax_cap)
+        if abs(desired_b - half_b[0]) / half_b[0] > _HYSTERESIS:
+            half_b[0] = desired_b
+            ax_b.set_ylim(-half_b[0], half_b[0])
+
+        # --- Auto-scale phase plot (x from motor A, y from motor B) -----------
+        desired_px = _fit_limit(buf_vA, _sp_a, vmax_cap=vmax_cap)
+        if abs(desired_px - half_px[0]) / half_px[0] > _HYSTERESIS:
+            half_px[0] = desired_px
+            ax_phase.set_xlim(-half_px[0], half_px[0])
+
+        desired_py = _fit_limit(buf_vB, _sp_b, vmax_cap=vmax_cap)
+        if abs(desired_py - half_py[0]) / half_py[0] > _HYSTERESIS:
+            half_py[0] = desired_py
+            ax_phase.set_ylim(-half_py[0], half_py[0])
+
+        # Keep reference line y = ratio*x spanning the full visible x range.
+        rx0, rx1 = ax_phase.get_xlim()
+        ref_line.set_xdata([rx0, rx1])
+        ref_line.set_ydata([args.ratio * rx0, args.ratio * rx1])
 
         # Update motor subplot titles with current readout when current limiting
         # is active (current_limit > 0).  Values come from RatioDrive.last_current_ma
