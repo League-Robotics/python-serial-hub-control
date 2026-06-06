@@ -1,5 +1,14 @@
 ---
-status: pending
+status: done
+tickets:
+- 001-001
+- 001-002
+- 001-003
+- 001-004
+- 001-005
+- 001-006
+- 001-007
+- 001-008
 ---
 
 # RHSP module: idiomatic-Python rewrite & protocol-alignment fixes

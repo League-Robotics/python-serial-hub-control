@@ -1,5 +1,13 @@
 ---
-status: pending
+status: done
+tickets:
+- 001-009
+- 001-010
+- 001-011
+- 001-012
+- 001-013
+- 001-014
+- 001-015
 ---
 
 # RHSP — build a new idiomatic Python library
