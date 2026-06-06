@@ -307,6 +307,24 @@ class RatioDrive:
         on_error:          Callable invoked with an ``Exception`` on transient
                            per-iteration errors.  If ``None``, errors are
                            suppressed silently.
+        current_limit_ma:  Per-motor current limit in milliamps.  When set,
+                           the governor reads ``Motor.get_current_ma()`` each Nth
+                           tick and treats any motor exceeding the limit as the
+                           bottleneck, capping the common scale ``g`` using the
+                           same cap-to-slowest machinery so the commanded ratio
+                           stays exact.  ``None`` (the default) disables current
+                           sensing entirely — the governor is unchanged.
+
+                           **Transaction-budget note**: ``GetADC`` costs ~16 ms
+                           per call on fw 1.8.2.  Reading 2 motors every tick at
+                           50 Hz (20 ms) would overflow the period.  Instead,
+                           current is sampled every ``_cur_sample_every`` ticks
+                           (default 3, giving ~16 Hz effective current sampling
+                           at 50 Hz governor rate).  The last sampled values are
+                           reused between reads.  The keep-alive heartbeat (100 ms
+                           period) is never starved because the maximum burst is
+                           2 × 16 ms ≈ 32 ms, which is the sample cost only once
+                           every 3 × 20 ms = 60 ms.
     """
 
     def __init__(
@@ -325,6 +343,7 @@ class RatioDrive:
         cpr: float | None = None,
         velocity_pid: tuple[float, float, float] | None = None,
         on_error: Callable[[Exception], None] | None = None,
+        current_limit_ma: int | None = None,
     ) -> None:
         self._hub = hub
         self._rate_hz = rate_hz
@@ -338,6 +357,22 @@ class RatioDrive:
         self._cpr = cpr
         self._velocity_pid = velocity_pid
         self._on_error = on_error
+
+        # Current-limit governor (opt-in via current_limit_ma).
+        self._current_limit_ma: int | None = current_limit_ma
+        # Hysteresis: engage limit ceiling when current > limit * (1 + hys),
+        # release when current < limit * (1 - hys).
+        self._cur_hys: float = 0.05
+        # Sample current every N ticks to stay within the 20 ms tick budget.
+        # GetADC costs ~16 ms each; 2 motors × 16 ms = 32 ms per sample tick.
+        # At 50 Hz (20 ms period) we sample every 3rd tick → effective ~16 Hz
+        # current reads, keeping the average per-tick overhead to 32/3 ≈ 11 ms.
+        self._cur_sample_every: int = 3
+        self._cur_tick_counter: int = 0
+        # Last sampled current per channel (mA); reused between sample ticks.
+        self._last_current_ma: dict[int, int] = {}
+        # Per-channel current-saturation flags (hysteresis state).
+        self._cur_sat_flags: dict[int, bool] = {}
 
         # Internal RLock guards all mutable governor state.
         self._lock = threading.RLock()
@@ -619,11 +654,55 @@ class RatioDrive:
             saturated_channels = [ch for ch, f in self._sat_flags.items() if f]
             self._saturated = len(saturated_channels) > 0
 
-            # -- Ceiling computation -------------------------------------
+            # -- Ceiling computation (velocity path) ---------------------
             if saturated_channels:
                 ceiling = min(new_normalized[ch] for ch in saturated_channels)
             else:
                 ceiling = S
+
+            # -- Current-aware ceiling (opt-in) --------------------------
+            # When current_limit_ma is set, read per-motor current every
+            # _cur_sample_every ticks (to stay within the 20 ms tick budget;
+            # see constructor docstring for the transaction-budget rationale).
+            # The last sampled values are reused on non-sample ticks.
+            if self._current_limit_ma is not None:
+                self._cur_tick_counter += 1
+                if self._cur_tick_counter >= self._cur_sample_every:
+                    self._cur_tick_counter = 0
+                    # Sample current for all active channels.
+                    for ch in weights:
+                        try:
+                            self._last_current_ma[ch] = self._hub.motors[ch].get_current_ma()
+                        except Exception:
+                            # On transient read failure keep the last known value.
+                            pass
+
+                # Update current hysteresis flags and compute current ceiling.
+                limit = self._current_limit_ma
+                hys = self._cur_hys
+                cur_ceiling = S  # default: no current constraint
+                for ch in weights:
+                    cur_ma = self._last_current_ma.get(ch, 0)
+                    was_cur_sat = self._cur_sat_flags.get(ch, False)
+                    if was_cur_sat:
+                        # Release when current drops below limit * (1 - hys).
+                        if cur_ma < limit * (1.0 - hys):
+                            self._cur_sat_flags[ch] = False
+                    else:
+                        # Engage when current exceeds limit * (1 + hys).
+                        if cur_ma > limit * (1.0 + hys):
+                            self._cur_sat_flags[ch] = True
+
+                    if self._cur_sat_flags.get(ch, False) and g > _EPSILON:
+                        # Project what g should be so this motor's current
+                        # would be at (or just below) the limit.
+                        # Simple proportional cap: ceiling_ch = g * limit / cur_ma.
+                        # This is the same cap-to-slowest approach used for velocity.
+                        ch_cur_ceiling = g * (limit / max(cur_ma, 1))
+                        cur_ceiling = min(cur_ceiling, ch_cur_ceiling)
+
+                # The more restrictive ceiling wins (velocity vs current).
+                ceiling = min(ceiling, cur_ceiling)
 
             # -- Slew-limit g toward ceiling -----------------------------
             if g > ceiling:
@@ -726,3 +805,14 @@ class RatioDrive:
         """Current weight mapping (copy)."""
         with self._lock:
             return dict(self._weights)
+
+    @property
+    def last_current_ma(self) -> dict[int, int]:
+        """Most-recently sampled current per channel in milliamps (copy).
+
+        Only populated when ``current_limit_ma`` is set.  Returns an empty
+        dict when current sensing is disabled.  Values are updated every
+        ``_cur_sample_every`` governor ticks.
+        """
+        with self._lock:
+            return dict(self._last_current_ma)

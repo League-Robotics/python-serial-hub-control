@@ -96,6 +96,19 @@ def _parse_args() -> argparse.Namespace:
         metavar="HZ",
         help="Polling rate in Hz for the worker thread.",
     )
+    p.add_argument(
+        "--current-limit",
+        type=int,
+        default=2000,
+        metavar="MA",
+        dest="current_limit",
+        help=(
+            "Per-motor current limit in milliamps. De-rates the pack if any motor "
+            "exceeds this threshold, preserving the commanded velocity ratio. "
+            "Default 2000 mA (conservative — well below a typical 5 A bench supply trip). "
+            "Set to 0 to disable current-aware de-rating."
+        ),
+    )
     return p.parse_args()
 
 
@@ -111,11 +124,12 @@ def _stream_worker(
     ratio: float,
     speed: int,
     rate: int,
-    data_queue: "queue.Queue[tuple[float, int, int]]",
+    current_limit_ma: int,
+    data_queue: "queue.Queue[tuple[float, int, int, int, int]]",
     stop_event: threading.Event,
     status_queue: "queue.Queue[str]",
 ) -> None:
-    """Worker thread: connect, drive, stream velocity samples, then clean up.
+    """Worker thread: connect, drive, stream velocity+current samples, then clean up.
 
     Lifecycle messages pushed to *status_queue*:
       ``"CONNECTING"`` — before the serial open.
@@ -125,21 +139,30 @@ def _stream_worker(
 
     Parameters
     ----------
-    port:        Serial device path (already resolved — never None here).
-    ch_a, ch_b:  Motor channel indices for the two strip charts.
-    ratio:       Weight for channel B; channel A is always 1.0.
-    speed:       Target velocity scale (counts/s).
-    rate:        Poll frequency in Hz.
-    data_queue:  Output queue of ``(monotonic_t, vA, vB)`` tuples.
-    stop_event:  Set by the main thread to request shutdown.
-    status_queue: Status string queue read by the render loop.
+    port:             Serial device path (already resolved — never None here).
+    ch_a, ch_b:       Motor channel indices for the two strip charts.
+    ratio:            Weight for channel B; channel A is always 1.0.
+    speed:            Target velocity scale (counts/s).
+    rate:             Poll frequency in Hz.
+    current_limit_ma: Per-motor current limit passed to RatioDrive (mA).
+                      Pass 0 to disable current-aware de-rating.
+    data_queue:       Output queue of ``(monotonic_t, vA, vB, iA_mA, iB_mA)`` tuples.
+                      ``iA_mA`` / ``iB_mA`` are the most-recently sampled motor
+                      currents from RatioDrive.last_current_ma (0 when not yet
+                      sampled or when current limiting is disabled).
+    stop_event:       Set by the main thread to request shutdown.
+    status_queue:     Status string queue read by the render loop.
     """
     status_queue.put("CONNECTING")
     try:
         with rhsp.connect(port) as hub:
             hub.init_peripherals()
             status_queue.put("RUNNING")
-            with RatioDrive(hub, {ch_a: 1.0, ch_b: ratio}) as drive:
+            # current_limit_ma=0 means "disabled"; pass None to RatioDrive in that case.
+            # The default of 2000 mA is a conservative limit well below a typical
+            # 5 A bench supply trip threshold.
+            limit = current_limit_ma if current_limit_ma > 0 else None
+            with RatioDrive(hub, {ch_a: 1.0, ch_b: ratio}, current_limit_ma=limit) as drive:
                 drive.set_speed(speed)
                 period = 1.0 / rate
                 while not stop_event.wait(period):
@@ -147,7 +170,12 @@ def _stream_worker(
                     t = time.monotonic()
                     vA = getattr(bulk, f"motor{ch_a}_velocity")
                     vB = getattr(bulk, f"motor{ch_b}_velocity")
-                    data_queue.put((t, vA, vB))
+                    # Current readings come from RatioDrive.last_current_ma (sampled
+                    # every few ticks by the governor — no extra GetADC cost here).
+                    cur = drive.last_current_ma
+                    iA = cur.get(ch_a, 0)
+                    iB = cur.get(ch_b, 0)
+                    data_queue.put((t, vA, vB, iA, iB))
     except Exception as exc:
         status_queue.put(f"ERROR: {exc}")
     finally:
@@ -249,10 +277,12 @@ def main() -> int:  # noqa: C901
     buf_vB: deque[int] = deque(maxlen=maxlen)
 
     # --- Shared queues and worker state ---------------------------------------
-    data_queue: queue.Queue[tuple[float, int, int]] = queue.Queue()
+    data_queue: queue.Queue[tuple[float, int, int, int, int]] = queue.Queue()
     status_queue: queue.Queue[str] = queue.Queue()
     worker_state: dict[str, Any] = {"thread": None, "stop": None}
     quit_flag: list[bool] = [False]
+    # Latest current readings (mA) — updated each render frame from data_queue.
+    last_current: dict[str, int] = {"A": 0, "B": 0}
 
     # --- Key handler ----------------------------------------------------------
     def _on_key(event: Any) -> None:
@@ -274,7 +304,8 @@ def main() -> int:  # noqa: C901
                     target=_stream_worker,
                     args=(
                         port, ch_a, ch_b, args.ratio, args.speed,
-                        args.rate, data_queue, stop_evt, status_queue,
+                        args.rate, args.current_limit,
+                        data_queue, stop_evt, status_queue,
                     ),
                     daemon=True,
                     name="velocity-chart-worker",
@@ -327,10 +358,12 @@ def main() -> int:  # noqa: C901
         # Drain data queue.
         try:
             while True:
-                t, vA, vB = data_queue.get_nowait()
+                t, vA, vB, iA, iB = data_queue.get_nowait()
                 buf_t.append(t)
                 buf_vA.append(vA)
                 buf_vB.append(vB)
+                last_current["A"] = iA
+                last_current["B"] = iB
         except queue.Empty:
             pass
 
@@ -349,6 +382,20 @@ def main() -> int:  # noqa: C901
         line_b.set_data(t_rel, vB_arr)
         phase_trace.set_data(vA_arr, vB_arr)
         phase_dot.set_data([vA_arr[-1]], [vB_arr[-1]])
+
+        # Update motor subplot titles with current readout when current limiting
+        # is active (current_limit > 0).  Values come from RatioDrive.last_current_ma
+        # via the data queue; they are 0 when not yet sampled.
+        if args.current_limit > 0:
+            iA = last_current["A"]
+            iB = last_current["B"]
+            lim = args.current_limit
+            ax_a.set_title(
+                f"Motor {ch_a}  I={iA} mA / {lim} mA", color="white", fontsize=9
+            )
+            ax_b.set_title(
+                f"Motor {ch_b}  I={iB} mA / {lim} mA", color="white", fontsize=9
+            )
 
     # --- Render loop ----------------------------------------------------------
     plt.ion()

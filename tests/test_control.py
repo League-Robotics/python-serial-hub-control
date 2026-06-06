@@ -716,15 +716,25 @@ class _FakeHubForRatio:
     """Minimal hub stub for RatioDrive governor tests (no network required).
 
     Provides ``bulk_input()`` returning a pre-configured ``BulkInputData``,
-    and a ``motors`` list of stubs that no-op ``set_velocity_pid``.
+    and a ``motors`` list of stubs that no-op ``set_velocity_pid`` and return
+    a configurable value from ``get_current_ma()``.
     """
 
     class _FakeMotor:
         def __init__(self) -> None:
             self.pid_calls: list[tuple] = []
+            self._current_ma: int = 0  # synthetic current returned by get_current_ma()
 
         def set_velocity_pid(self, p: float, i: float, d: float) -> None:
             self.pid_calls.append((p, i, d))
+
+        def get_current_ma(self) -> int:
+            """Return the synthetic motor current set via set_current_ma()."""
+            return self._current_ma
+
+        def set_current_ma(self, ma: int) -> None:
+            """Test helper: set the value returned by get_current_ma()."""
+            self._current_ma = ma
 
     def __init__(self) -> None:
         self.motors = [self._FakeMotor() for _ in range(4)]
@@ -1976,3 +1986,370 @@ class TestRatioDriveGenuineSustainedBottleneck:
             f"Accumulator should reset to 0 after shortfall cleared, "
             f"got {rd._sat_time.get(1)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for current-limit tests
+# ---------------------------------------------------------------------------
+
+
+def _make_ratio_drive_cur(
+    weights: dict,
+    *,
+    current_limit_ma: int,
+    rate_hz: float = 50.0,
+    max_accel: float = 6000.0,
+    recovery_accel: float | None = None,
+    sat_margin: float = 0.15,
+    sat_release_margin: float = 0.07,
+    sat_settle_s: float = 0.0,
+    min_scale: float = 0.0,
+    deadband: int = 0,
+    target_scale: float = 1000.0,
+) -> tuple[RatioDrive, _FakeHubForRatio, dict[int, _RecordingController]]:
+    """Create a RatioDrive with current_limit_ma and _RecordingControllers injected.
+
+    ``_cur_sample_every`` is forced to 1 so that get_current_ma() is called on
+    every tick — this makes unit tests deterministic without having to run
+    _cur_sample_every extra ticks before the current ceiling kicks in.
+    """
+    fake_hub = _FakeHubForRatio()
+    rd = RatioDrive(
+        fake_hub,
+        weights,
+        rate_hz=rate_hz,
+        max_accel=max_accel,
+        recovery_accel=recovery_accel,
+        sat_margin=sat_margin,
+        sat_release_margin=sat_release_margin,
+        sat_settle_s=sat_settle_s,
+        min_scale=min_scale,
+        deadband=deadband,
+        current_limit_ma=current_limit_ma,
+    )
+    # Force current sampling on every tick so tests are deterministic.
+    rd._cur_sample_every = 1
+
+    # Inject recording controllers (bypasses start()/attach()).
+    ctrls: dict[int, _RecordingController] = {}
+    for ch in weights:
+        rc = _RecordingController(ch)
+        ctrls[ch] = rc
+        rd._controllers[ch] = rc  # type: ignore[assignment]
+
+    # Prime the target scale.
+    rd._target_scale = target_scale
+    return rd, fake_hub, ctrls
+
+
+# ---------------------------------------------------------------------------
+# RatioDrive — current-limit tests (003-007)
+# ---------------------------------------------------------------------------
+
+
+class TestRatioDriveCurrentLimitNoneRegression:
+    """current_limit_ma=None must preserve all existing velocity-only behavior."""
+
+    def test_none_no_current_reads(self) -> None:
+        """With current_limit_ma=None, get_current_ma() is never called."""
+        weights = {0: 1.0, 1: 1.0}
+        rd, fake_hub, _ = _make_ratio_drive_cur(
+            weights,
+            current_limit_ma=0,  # will convert to None below
+            target_scale=1000.0,
+            max_accel=100000.0,
+        )
+        # Override: set current_limit_ma to None explicitly (factory used 0 → None
+        # mirroring the velocity_chart.py convention; but here we test the param directly).
+        rd._current_limit_ma = None
+        # Ensure current reads would be detectable if called.
+        fake_hub.motors[0].set_current_ma(99999)
+        fake_hub.motors[1].set_current_ma(99999)
+
+        rd._scale = 1000.0
+        bulk = _make_bulk_timed(motor0_velocity=1000, motor1_velocity=1000, time_ms=20)
+        rd.update(bulk)
+
+        # Scale must not be affected by the high fake current.
+        assert rd.scale >= 999.0, (
+            f"current_limit_ma=None must not de-rate scale; got {rd.scale:.2f}"
+        )
+        # last_current_ma should remain empty (no reads).
+        assert rd.last_current_ma == {}, (
+            "last_current_ma should be empty when current_limit_ma=None"
+        )
+
+    def test_none_velocity_saturation_unchanged(self) -> None:
+        """Velocity-based saturation works identically with current_limit_ma=None."""
+        weights = {0: 1.0, 1: 1.0}
+        S = 500.0
+        rd, _, _ = _make_ratio_drive(
+            weights,
+            target_scale=S,
+            max_accel=100000.0,
+            sat_margin=0.10,
+            sat_settle_s=0.0,
+            deadband=0,
+        )
+        rd._scale = S
+
+        # Wheel 1 stalled — velocity saturation should fire.
+        bulk = _make_bulk_timed(motor0_velocity=500, motor1_velocity=0, time_ms=20)
+        rd.update(bulk)
+
+        assert rd.saturated, "Velocity saturation must fire with current_limit_ma=None"
+        assert rd.scale < S, "Scale must drop when velocity-saturated"
+
+
+class TestRatioDriveCurrentLimitDerates:
+    """Current above limit causes de-rating; ratio stays exact."""
+
+    def test_derates_when_current_over_limit(self) -> None:
+        """Motor 0 over limit → g is capped below S after enough ticks."""
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        limit = 2000  # mA
+        rd, fake_hub, ctrls = _make_ratio_drive_cur(
+            weights,
+            current_limit_ma=limit,
+            target_scale=S,
+            max_accel=100000.0,
+        )
+        rd._scale = S
+        # Motor 0 draws 500 mA above limit (above the 5% hysteresis band).
+        fake_hub.motors[0].set_current_ma(limit + 500)
+        fake_hub.motors[1].set_current_ma(100)  # well under
+
+        # Pre-seed current hysteresis flag so first tick actually applies ceiling.
+        rd._cur_sat_flags[0] = True
+        rd._last_current_ma[0] = limit + 500
+        rd._last_current_ma[1] = 100
+
+        bulk = _make_bulk_timed(motor0_velocity=1000, motor1_velocity=1000, time_ms=20)
+        rd.update(bulk)
+
+        assert rd.scale < S, (
+            f"Scale should be capped below S={S} when motor current exceeds limit; "
+            f"got {rd.scale:.2f}"
+        )
+
+    def test_ratio_exact_during_current_saturation(self) -> None:
+        """Commanded ratio stays exact (w0/w1) at every tick under current saturation."""
+        weights = {0: 1.0, 1: 0.5}
+        S = 1000.0
+        limit = 2000
+        rd, fake_hub, ctrls = _make_ratio_drive_cur(
+            weights,
+            current_limit_ma=limit,
+            target_scale=S,
+            max_accel=100000.0,
+            recovery_accel=100000.0,
+        )
+        rd._scale = S
+        # Motor 0 persistently over limit.
+        fake_hub.motors[0].set_current_ma(limit + 800)
+        fake_hub.motors[1].set_current_ma(50)
+        # Seed flags so ceiling is active from tick 1.
+        rd._cur_sat_flags[0] = True
+        rd._last_current_ma[0] = limit + 800
+        rd._last_current_ma[1] = 50
+
+        expected_ratio = weights[0] / weights[1]  # 2.0
+
+        dt_ms = 20
+        time_ms = 0
+        for step in range(15):
+            time_ms += dt_ms
+            g = rd.scale
+            bulk = _make_bulk_timed(
+                motor0_velocity=round(g * weights[0]),
+                motor1_velocity=round(g * weights[1]),
+                time_ms=time_ms,
+            )
+            rd.update(bulk)
+
+            t0 = rd.commanded_targets.get(0, 0)
+            t1 = rd.commanded_targets.get(1, 0)
+            # Only check ratio when targets are large enough that integer rounding
+            # (±1 count) does not dominate.  With w0/w1=2.0 and t1>=20, the
+            # maximum rounding error is ±1/20 = 0.05 on each target, giving a
+            # combined ratio error of at most ~0.1.  We allow 0.15 here.
+            if abs(t1) >= 20:
+                actual = t0 / t1
+                assert abs(actual - expected_ratio) < 0.15, (
+                    f"Step {step}: ratio {actual:.4f} vs expected {expected_ratio:.4f} "
+                    f"(t0={t0}, t1={t1})"
+                )
+
+    def test_scale_capped_multiple_ticks(self) -> None:
+        """Scale stays at or below the current ceiling across multiple ticks."""
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        limit = 2000
+        over_limit = limit + 600  # 2600 mA → ceiling = g * (2000/2600) ≈ 0.769*g
+        rd, fake_hub, ctrls = _make_ratio_drive_cur(
+            weights,
+            current_limit_ma=limit,
+            target_scale=S,
+            max_accel=100000.0,
+        )
+        rd._scale = S
+        fake_hub.motors[0].set_current_ma(over_limit)
+        fake_hub.motors[1].set_current_ma(100)
+        rd._cur_sat_flags[0] = True
+        rd._last_current_ma[0] = over_limit
+        rd._last_current_ma[1] = 100
+
+        dt_ms = 20
+        time_ms = 0
+        for _ in range(10):
+            time_ms += dt_ms
+            g = rd.scale
+            bulk = _make_bulk_timed(
+                motor0_velocity=round(g), motor1_velocity=round(g), time_ms=time_ms
+            )
+            rd.update(bulk)
+
+        # Scale must be well below S after sustained current saturation.
+        assert rd.scale < S * 0.85, (
+            f"Expected scale < {S*0.85:.0f} under sustained current saturation; "
+            f"got {rd.scale:.2f}"
+        )
+
+
+class TestRatioDriveCurrentLimitRecovery:
+    """When current drops below limit, g recovers toward S."""
+
+    def test_recovery_toward_setpoint(self) -> None:
+        """After current drops below limit, g climbs back toward S."""
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        limit = 2000
+        rd, fake_hub, ctrls = _make_ratio_drive_cur(
+            weights,
+            current_limit_ma=limit,
+            target_scale=S,
+            max_accel=100000.0,
+            recovery_accel=100000.0,
+        )
+        # Phase 1: set g low to simulate post-de-rate state.
+        rd._scale = 400.0
+        # Motor current is now well below limit.
+        fake_hub.motors[0].set_current_ma(100)
+        fake_hub.motors[1].set_current_ma(100)
+        rd._cur_sat_flags[0] = False
+        rd._cur_sat_flags[1] = False
+        rd._last_current_ma[0] = 100
+        rd._last_current_ma[1] = 100
+
+        dt_ms = 20
+        time_ms = 0
+        for _ in range(20):
+            time_ms += dt_ms
+            g = rd.scale
+            bulk = _make_bulk_timed(
+                motor0_velocity=round(g), motor1_velocity=round(g), time_ms=time_ms
+            )
+            rd.update(bulk)
+
+        # Scale should have climbed back toward S.
+        assert rd.scale > 900.0, (
+            f"Expected scale to recover toward S={S}; got {rd.scale:.2f}"
+        )
+
+    def test_hysteresis_prevents_immediate_release(self) -> None:
+        """Current must drop below limit*(1-hys) before the ceiling releases."""
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        limit = 2000
+        rd, fake_hub, ctrls = _make_ratio_drive_cur(
+            weights,
+            current_limit_ma=limit,
+            target_scale=S,
+            max_accel=100000.0,
+        )
+        rd._scale = S
+        hys = rd._cur_hys  # 0.05
+
+        # Current just barely below limit (within hysteresis band):
+        # limit * (1 - hys) = 2000 * 0.95 = 1900; set current to 1950.
+        # The flag was True (from a previous over-limit episode).
+        just_below = int(limit * (1.0 - hys)) + 50  # 1950 mA — above release threshold
+        fake_hub.motors[0].set_current_ma(just_below)
+        fake_hub.motors[1].set_current_ma(100)
+        rd._cur_sat_flags[0] = True  # already saturated
+        rd._last_current_ma[0] = just_below
+        rd._last_current_ma[1] = 100
+
+        bulk = _make_bulk_timed(motor0_velocity=1000, motor1_velocity=1000, time_ms=20)
+        rd.update(bulk)
+
+        # Flag must still be True (hysteresis holds; 1950 > 1900 = release threshold).
+        assert rd._cur_sat_flags.get(0, False), (
+            "Current flag should remain True within the hysteresis band"
+        )
+
+    def test_flag_releases_below_hysteresis_threshold(self) -> None:
+        """Current below limit*(1-hys) clears the current saturation flag."""
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        limit = 2000
+        rd, fake_hub, ctrls = _make_ratio_drive_cur(
+            weights,
+            current_limit_ma=limit,
+            target_scale=S,
+            max_accel=100000.0,
+        )
+        rd._scale = S
+        hys = rd._cur_hys  # 0.05
+        # release threshold = limit * (1 - hys) = 1900 mA; set current well below.
+        well_below = int(limit * (1.0 - hys)) - 200  # 1700 mA
+        fake_hub.motors[0].set_current_ma(well_below)
+        fake_hub.motors[1].set_current_ma(100)
+        rd._cur_sat_flags[0] = True  # previously saturated
+        rd._last_current_ma[0] = well_below
+        rd._last_current_ma[1] = 100
+
+        bulk = _make_bulk_timed(motor0_velocity=1000, motor1_velocity=1000, time_ms=20)
+        rd.update(bulk)
+
+        # Flag must be cleared now.
+        assert not rd._cur_sat_flags.get(0, False), (
+            "Current flag should clear when current drops below limit*(1-hys)"
+        )
+
+
+class TestRatioDriveCurrentLimitConstructor:
+    """Constructor stores current_limit_ma; default is None."""
+
+    def test_default_is_none(self) -> None:
+        hub = _FakeHubForRatio()
+        rd = RatioDrive(hub, {0: 1.0, 1: 1.0})
+        assert rd._current_limit_ma is None
+
+    def test_explicit_value_stored(self) -> None:
+        hub = _FakeHubForRatio()
+        rd = RatioDrive(hub, {0: 1.0, 1: 1.0}, current_limit_ma=1500)
+        assert rd._current_limit_ma == 1500
+
+    def test_last_current_ma_property_empty_when_disabled(self) -> None:
+        hub = _FakeHubForRatio()
+        rd = RatioDrive(hub, {0: 1.0, 1: 1.0})
+        assert rd.last_current_ma == {}
+
+    def test_last_current_ma_populated_after_tick(self) -> None:
+        """last_current_ma is populated after a tick when current_limit_ma is set."""
+        weights = {0: 1.0, 1: 1.0}
+        limit = 2000
+        rd, fake_hub, _ = _make_ratio_drive_cur(
+            weights, current_limit_ma=limit, target_scale=500.0
+        )
+        fake_hub.motors[0].set_current_ma(300)
+        fake_hub.motors[1].set_current_ma(400)
+
+        bulk = _make_bulk_timed(motor0_velocity=500, motor1_velocity=500, time_ms=20)
+        rd.update(bulk)
+
+        cur = rd.last_current_ma
+        assert cur.get(0) == 300, f"Expected 300 mA for ch0, got {cur.get(0)}"
+        assert cur.get(1) == 400, f"Expected 400 mA for ch1, got {cur.get(1)}"
