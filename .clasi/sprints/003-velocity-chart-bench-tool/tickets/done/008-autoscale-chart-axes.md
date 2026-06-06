@@ -127,10 +127,11 @@ logical change is how `_update()` computes and applies axis limits.
   updated `--vmax` help text.
 - [x] `uv run pytest` stays green (583 tests pass — 9 new unit tests added); `velocity_chart.py` is
   not pytest-collected.
-- [ ] **Manual hardware gate (operator):** run `uv run python
-  examples/velocity_chart.py --ratio 5.0 --speed 1000` and confirm both strip
-  charts and the phase plot remain readable while motors run. Repeat with
-  `--ratio 0.5`. Gate signed off by team-lead with stakeholder.
+- [x] **Manual hardware gate (operator):** PASSED 2026-06-06 — ran `--ratio 5.0
+  --speed 1000`; both strip charts and the phase plot stayed on-screen/readable
+  while motors ran (stakeholder: "that part is working better"). (The high-ratio
+  run also surfaced a separate governor limit-cycle, tracked in 003-009 — not an
+  auto-scaling issue.)
 
 ## Implementation Plan
 

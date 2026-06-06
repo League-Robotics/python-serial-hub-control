@@ -72,47 +72,116 @@ Timeout and retry semantics are unchanged; `LoopbackTransport` (tests) is
 unaffected. Measured result: ~16 ms/transaction on fw 1.8.2 (~62× speedup).
 Three new hardware-free unit tests added in `tests/test_transport.py`.
 
-### Modified: `src/rhsp/control.py` — governor spin-up fix (ticket 003-005)
+### Modified: `src/rhsp/control.py` — unified two-cap governor (tickets 003-005, 003-007, 003-009, 003-010)
 
-Fixed `RatioDrive` governor spin-up collapse. The saturation detector fired on a
-single tick: during motor acceleration the measured velocity necessarily lags the
-commanded scale, so `shortfall > sat_margin` triggered on the very first tick
-after `g` stepped up, capping the scale back to 0 before the motor had time to
-reach speed. This caused perpetual oscillation between ~120 and 0 on the real
-hub.
+Tickets 003-005 (spin-up settle timer), 003-007 (current ceiling), and 003-009
+(limit-cycle probe) were successive hardware-driven patches that each fixed one
+failure mode while introducing a regression in another regime. Ticket 003-010
+**superseded all three** by replacing the accumulated patch logic with a single
+unified two-cap governor in `RatioDrive.update()`.
 
-**Fix**: Saturation now requires the shortfall to persist continuously for a
-`sat_settle_s` window (new constructor parameter, default 0.3 s) before the
-scale ceiling is engaged. Per-channel shortfall accumulation is tracked in `dt`
-increments; the accumulator resets when shortfall falls below `sat_release_margin`.
-All existing public semantics (cap-to-slowest under genuine sustained load, slew
-limits, hysteresis) are preserved. Hardware-validated: scale ramps cleanly to
-1 000 cnt/s with no collapse; sustained-load cap-to-slowest still triggers correctly.
+**Key hardware insight driving the design**: On fw 1.8.2 the onboard
+CONSTANT_VELOCITY PID is stiff — under mechanical load it holds velocity by
+ramping motor current toward overcurrent rather than letting speed droop. This
+means two physically distinct bottlenecks require the signal that is actually
+valid for each:
 
-### Modified: `src/rhsp/control.py` — current-aware de-rating (ticket 003-007)
+- **Max-speed bottleneck**: a wheel commanded faster than its physical top speed.
+  NOT recoverable until the setpoint or ratio changes. Correct signal: measured
+  velocity has **plateaued** (dv/dt ≈ 0) while still below command.
+- **Load bottleneck**: a wheel mechanically loaded so motor current spikes.
+  Immediately recoverable when load clears. Correct signal: per-motor current.
 
-Added opt-in current-aware de-rating to `RatioDrive`. The fw 1.8.2 onboard
-CONSTANT_VELOCITY PID is stiff: under load it holds velocity by ramping motor
-current to overcurrent rather than letting velocity droop. Because velocity never
-droops, the velocity-saturation governor never triggers, and the bench supply
-trips instead. Current-based de-rating is the correct guard for this firmware.
+**Final governor design — two caps per `RatioDrive.update()` tick**:
 
-**API change**: `RatioDrive.__init__` gains `current_limit_ma: int | None = None`.
-When set, the governor reads each active motor's current every Nth tick (every
-3rd tick at 50 Hz → ~16 Hz effective, keeping the keep-alive heartbeat well
-within its 100 ms budget). If any motor's current exceeds the limit, `g` is
-capped proportionally (`ceiling = g * (limit / current)`) with hysteresis, then
-slew-limited — the same machinery as the velocity saturation path. The commanded
-ratio between motors is preserved exactly at all times (targets are still
-`clamp_int16(round(g * w_i))`). When `current_limit_ma=None` (default),
-no current reads occur and all existing behavior is identical.
+**Cap 1 — sticky max-speed latch (dv/dt-based)**:
+A wheel is "at its ceiling" when its measured velocity is below its commanded
+target by `speed_margin_frac` AND `|dv/dt|` (smoothed via EMA, alpha ≈ 0.3) is
+below `plateau_threshold_cnts_s2` (default 150 cnt/s²) — meaning it has stopped
+accelerating, not merely lagging during spin-up. On detection, latch a per-wheel
+cap: `g_max_speed[i] = v_measured_i / |w_i|`. Hold it with no probing — this
+eliminates both the limit cycle (009) and the spin-up overshoot (005).
 
-`examples/velocity_chart.py` gains `--current-limit MA` (default 2000) and
-displays per-motor current in the figure title (`I0=NNNmA I1=NNNmA`).
+Latch is **hardened** against false fires (003-010 follow-ups): the plateau
+condition must persist for `latch_persist_ticks` consecutive ticks (default 3,
+60 ms at 50 Hz), AND the would-be cap must be at least `min_latch_frac * g`
+(default 0.25) — a near-zero cap value signals spin-up noise, not a genuine
+physical ceiling. The `_ever_accelerating` per-wheel flag ensures the plateau
+test is only eligible after the motor has first demonstrated meaningful
+acceleration, preventing a stopped motor (v=0 since tick 0) from misfiring.
 
-Hardware gate passed 2026-06-06: hand-loading a motor at `--current-limit 1500`
-de-rated the pack with the phase dot sliding down the ratio line; supply did not
-trip.
+Latch clears on: `set_speed`, `set_speed_rpm`, `set_weights`, or `set_ratio`
+calls; or when measured velocity rises above `latch * (1 + speed_margin_frac)`
+spontaneously (hysteresis prevents noise-driven false clears).
+
+**Cap 2 — live current cap (opt-in via `current_limit_ma`)**:
+When `current_limit_ma` is set, per-motor current is sampled via
+`Motor.get_current_ma()` every Nth tick (every 3rd tick at 50 Hz → ~16 Hz
+effective, keeping the keep-alive heartbeat within budget). Hysteresis (5%)
+guards engage/release transitions. When any motor's current-saturation flag is
+active, a proportional ceiling `g * (limit / current)` is applied to `g`. When
+ALL motors are under the limit, `live_current_cap = S` — no constraint at all.
+This is the critical fix for the 007/009 regression: releasing load causes
+current to drop, automatically removing the cap and allowing `g` to recover.
+
+**Slew and g_target computation (each tick)**:
+```
+sticky_max_speed_cap = min(g_max_speed[i] for latched wheels)  # or S if none latched
+live_current_cap     = current-derived ceiling if over-limit, else S
+g_target             = min(S, sticky_max_speed_cap, live_current_cap)
+```
+`g` slews down fast (via `max_accel`, default 6000 cnt/s²) and up fast
+(`recovery_accel_up`, defaults to `max_accel`) — spin-up reaches a 1000 cnt/s
+setpoint in ~0.4 s at 50 Hz (8 ticks). The live current cap re-engages
+automatically if fast recovery draws over-limit current, so no separate
+"damped recovery" rate is needed. `g` is clamped to `[min_scale, S]` after slew.
+
+Motor targets are issued as `t_i = clamp_int16(round(g * w_i))` — the commanded
+ratio between motors is preserved exactly at all times.
+
+**Superseded parameters** (`sat_settle_s`, `sat_margin`, `sat_release_margin`,
+`probe_step`, `probe_settle_ticks`) are accepted but ignored with a deprecation
+note. No caller is broken.
+
+**Public API**: `RatioDrive.__init__` call signature is backward-compatible.
+New tunables (`ema_alpha`, `plateau_threshold_cnts_s2`, `speed_margin_frac`,
+`recovery_accel_up`, `latch_persist_ticks`, `min_latch_frac`) have documented
+defaults. `current_limit_ma` API is unchanged from ticket 003-007.
+
+Hardware gate results: ratio-1.0 spin-up reaches 1000 cnt/s with no latch
+firing; ratio-5.0 latch fires at the physical ceiling without limit-cycle;
+manual load test at `--current-limit 1500` de-rated the pack preserving ratio,
+recovered on load release (stakeholder: "the algorithm seems to work really well").
+
+### Modified: `examples/velocity_chart.py` — auto-scaling axes (ticket 003-008)
+
+Fixed `velocity_chart.py` axis scaling. Previously all strip charts and the
+phase plot used a single fixed `±vmax` derived only from channel A's `--speed`.
+At high ratios (e.g. `--ratio 5.0 --speed 1000`) channel B's trace was entirely
+off-screen; the phase plot was degenerate because `set_aspect("equal")` with a
+shared range produced a near-flat rectangle.
+
+**Changes** (all confined to `examples/velocity_chart.py`; no library code touched):
+
+- **Strip charts scale per-axis independently**. Each chart's y-limits are
+  recomputed on every `_update()` frame via the `_fit_limit()` helper:
+  `half_span = max(max(|data_in_window|), |setpoint|, floor=50) * 1.15`.
+  Motor A tracks `~speed`; motor B tracks `~speed * ratio`. Hysteresis (5%
+  threshold) prevents the axes from "breathing" when data is near-steady.
+
+- **Phase plot drops `set_aspect("equal")`**. X and Y limits are derived
+  independently using `_fit_limit()` for each axis. The `y = ratio * x`
+  reference line is redrawn each frame spanning the current `xlim`.
+
+- **`--vmax` acts as a cap**, not a fixed limit. It is the ceiling on the
+  auto-scaled half-span for both strip charts. When omitted, axes scale freely.
+
+- **`_fit_limit()` helper** (new private function):
+  `_fit_limit(values, setpoint, margin=0.15, floor=50.0, vmax_cap=None) -> float`.
+  Pure function; no side effects; hardware-free unit tests cover it directly.
+
+Hardware gate passed 2026-06-06: `--ratio 5.0 --speed 1000` kept both strip
+charts and the phase plot on-screen throughout the run.
 
 ### Modified: `src/rhsp/devices/motor.py` and `src/rhsp/hub.py` — ADC API (ticket 003-006)
 
@@ -170,6 +239,22 @@ firmware: the velocity signal never droops enough to trigger the cap, and the
 bench supply trips on overcurrent instead. The ratio coordinator must therefore
 de-rate on current, not on velocity droop.
 
+**Auto-scaling (003-008)**: At ratios far from 1.0 the original fixed `±vmax`
+made one strip chart completely off-scale and the phase plot degenerate. Per-axis
+independent scaling is the minimal change to keep the tool usable for the full
+`--ratio`/`--speed` parameter space without requiring the user to pass a specific
+`--vmax` for every session.
+
+**Unified governor (003-010)**: The successive patches in 003-005/007/009 each
+solved one hardware failure mode while introducing a regression in another. The
+unified two-cap design resolves all three regimes cleanly by using the physically
+correct signal for each: plateau (dv/dt) for max-speed detection, current for
+load detection. A fixed settle timer (005) is an imprecise proxy for spin-up
+lag; using actual dv/dt is more correct and eliminates the high-ratio overshoot.
+The 007/009 current de-rate got stuck at zero because the release condition was
+tied to the wrong signal; the live current cap releases automatically when current
+drops, which is the physically correct trigger.
+
 ---
 
 ## Module Architecture
@@ -187,7 +272,7 @@ graph LR
     end
 
     subgraph Control["src/rhsp/control.py"]
-        RD[RatioDrive\nsat_settle_s\ncurrent_limit_ma]
+        RD[RatioDrive\ntwo-cap governor\ncurrent_limit_ma]
     end
 
     subgraph Hub["src/rhsp/hub.py"]
@@ -254,7 +339,7 @@ lock without deadlock.
 
 ## Module Boundaries and Responsibilities
 
-### `examples/velocity_chart.py` (new)
+### `examples/velocity_chart.py` (new; extended by tickets 003-007, 003-008)
 
 **Responsibility**: Interactive live-telemetry visualization for two-motor
 velocity control validation.
@@ -262,6 +347,16 @@ velocity control validation.
 **Boundary**: Imports `rhsp` (public API), `rhsp.control.RatioDrive`, `matplotlib`,
 `numpy`, and stdlib only. Does not import from `rhsp.session`, `rhsp.framing`,
 `rhsp.transport`, or any internal module. Does not modify any file in `src/rhsp/`.
+
+**Additions through sprint end**:
+- `--current-limit MA` (default 2000): passed to `RatioDrive(current_limit_ma=...)`;
+  per-motor current displayed in the figure title (`I0=NNNmA I1=NNNmA`).
+- `_fit_limit(values, setpoint, margin=0.15, floor=50, vmax_cap=None) -> float`:
+  axis half-span helper. Used by `_update()` to compute independent per-axis
+  y-limits for both strip charts and both phase-plot axes.
+- Strip charts scale per-axis (independent); phase plot drops `set_aspect("equal")`
+  and scales X and Y independently via `_fit_limit`. `--vmax` is a cap on the
+  auto-scaled half-span, not a fixed limit.
 
 **Use cases**: SUC-001, SUC-002, SUC-003.
 
@@ -288,17 +383,33 @@ the buffer is empty. No change to the `LoopbackTransport` used in tests.
 **Use cases**: SUC-002, SUC-003 (whole-library latency fix; all transaction
 throughput depends on this).
 
-### `src/rhsp/control.py` (modified — tickets 003-005, 003-007)
+### `src/rhsp/control.py` (modified — tickets 003-005, 003-007, 003-009, 003-010)
 
 **Responsibility**: Implements `RatioDrive` — the two-motor velocity ratio
-coordinator and governor.
+coordinator with a unified two-cap governor.
 
-**Changes**:
-- `RatioDrive.__init__` gains `sat_settle_s: float = 0.3` — settling window
-  before the saturation detector caps the scale.
-- `RatioDrive.__init__` gains `current_limit_ma: int | None = None` — opt-in
-  current-aware de-rating; when set, reads per-motor current every Nth tick and
-  caps `g` proportionally when the limit is exceeded.
+**Final state**: The governor in `RatioDrive.update()` applies two independent
+caps each tick:
+
+1. **Sticky max-speed latch (Cap 1)**: Per-wheel dv/dt EMA detects when a wheel
+   has plateaued below its commanded target (not just lagging during spin-up).
+   Fires a per-wheel latch `g_max_speed[i] = v_i / |w_i|`; held until
+   setpoint/weight change or spontaneous velocity recovery. Hardened against false
+   latches: requires `latch_persist_ticks` consecutive plateau ticks and
+   `cap >= min_latch_frac * g`.
+
+2. **Live current cap (Cap 2)**: Opt-in via `current_limit_ma`. Proportional
+   pull-down when any motor's current exceeds the limit (hysteresis); cap fully
+   removed when all motors are under limit so load recovery is automatic.
+
+`g_target = min(S, sticky_cap, current_cap)`; `g` slews fast in both directions
+(default `recovery_accel_up = max_accel = 6000 cnt/s²`); targets issued as
+`clamp_int16(round(g * w_i))` — ratio preserved exactly.
+
+**Constructor**: new tunables `ema_alpha`, `plateau_threshold_cnts_s2`,
+`speed_margin_frac`, `recovery_accel_up`, `latch_persist_ticks`, `min_latch_frac`
+(all with documented defaults). `current_limit_ma` unchanged. Superseded params
+(`sat_settle_s`, `probe_step`, etc.) accepted but ignored.
 
 **Use cases**: SUC-002, SUC-003.
 
@@ -379,7 +490,52 @@ block handles keep-alive startup and fail-safe shutdown automatically.
 **Consequences**: A brief "CONNECTING" pause on each SPACE-start (hub
 handshake + `init_peripherals()`). Acceptable for an interactive bench tool.
 
-### Decision 3: matplotlib and numpy as optional dependencies, not dev dependencies
+### Decision 3: Unified two-cap governor (dv/dt plateau + live current) instead of patched velocity-shortfall logic
+
+**Context**: Three successive patches (005 settle timer, 007 current ratchet,
+009 limit-cycle probe) addressed real hardware failure modes but conflated two
+physically different bottleneck types in a single shortfall-based code path.
+
+**Alternatives considered**:
+- Continue patching: add more guards to the settle-timer/probe path. Each guard
+  interacted with the others, and the regression surface grew with each patch.
+- Replace with a single plateau timer: more precise than a wall-clock window but
+  still one-dimensional — would not handle the load/current regime separately.
+- Unified two-cap design (chosen): each cap uses the signal valid for its regime
+  (dv/dt for max-speed, current for load); the two paths cannot interfere.
+
+**Why this choice**: The firmware's stiff PID means velocity droops only at max
+speed, not under load. A single velocity-based governor therefore cannot distinguish
+the two regimes. Using the physically correct signal for each cap produces a
+governor with no cross-regime interactions and no empirical timer constants.
+
+**Consequences**: Superseded constructor parameters are kept as accepted-but-ignored
+for API compatibility. The governor adds per-wheel EMA state and a current sample
+counter but no new external dependencies. Hardware-validated across both ratio-1.0
+and ratio-5.0 scenarios with and without load.
+
+### Decision 4: `_fit_limit()` helper for per-axis auto-scaling in velocity_chart
+
+**Context**: Auto-scaling needed to be applied consistently to four axes (strip-A,
+strip-B, phase-X, phase-Y) with the same formula and `--vmax` cap logic.
+
+**Alternatives considered**:
+- Inline the formula in `_update()` four times: DRY violation, harder to test.
+- Class method on the chart object: no state needed, a plain function is simpler.
+- Pure module-level helper (chosen): testable without a matplotlib figure; callers
+  pass exactly the data they have.
+
+**Why this choice**: `_fit_limit` has no side effects and depends on no chart
+state, so it can be covered by unit tests that run without a display. The
+`vmax_cap=None` default preserves the unconstrained auto-scale path; passing the
+CLI `--vmax` value enables the cap. This keeps the policy (`--vmax` is a cap, not
+a fixed limit) visible at the call site.
+
+**Consequences**: 9 hardware-free unit tests cover `_fit_limit` directly. The
+`_update()` render callback is simplified: four `set_ylim`/`set_xlim` calls each
+read from one `_fit_limit` call.
+
+### Decision 5: matplotlib and numpy as optional dependencies, not dev dependencies
 
 **Context**: matplotlib and numpy could be placed in `[dependency-groups] dev`
 (uv-only syntax) alongside pytest, or in `[project.optional-dependencies]`.
@@ -423,12 +579,16 @@ bench tool add `[bench]` to their install.
   `read(n)`), the call now returns as soon as data is available rather than
   blocking for the full port timeout. The `LoopbackTransport` used in tests is
   unaffected. Timeout semantics are preserved.
-- **`src/rhsp/control.py`**: `RatioDrive` constructor gains two new optional
-  parameters (`sat_settle_s`, `current_limit_ma`). Callers that pass no
-  arguments are unaffected. Saturation timing changes: with the default
-  `sat_settle_s=0.3`, a shortfall must persist for 0.3 s before the scale is
-  capped; callers relying on single-tick saturation (which was always a bug)
-  need no update.
+- **`src/rhsp/control.py`**: `RatioDrive` constructor gains new optional
+  parameters for the unified two-cap governor: `current_limit_ma`,
+  `ema_alpha`, `plateau_threshold_cnts_s2`, `speed_margin_frac`,
+  `recovery_accel_up`, `latch_persist_ticks`, `min_latch_frac`. All have
+  backward-compatible defaults. Superseded parameters (`sat_settle_s`,
+  `sat_margin`, `sat_release_margin`, `probe_step`, `probe_settle_ticks`)
+  are accepted but ignored with deprecation notes — no caller is broken.
+  The governor behavior changes substantially (see "What Changed"), but the
+  public API (setpoint methods, `scale`/`measured`/`saturated` properties,
+  `__enter__`/`__exit__`, `start`/`close`) is unchanged.
 - **`src/rhsp/devices/motor.py`**: Gains `get_current_ma()`. No existing methods
   changed.
 - **`src/rhsp/hub.py`**: Gains `battery_voltage_mv()` and `battery_current_ma()`.
@@ -440,13 +600,20 @@ bench tool add `[bench]` to their install.
   and `Hub.battery_voltage_mv()` / `Hub.battery_current_ma()` respectively.
 - **`pyproject.toml`**: One new table entry (`[project.optional-dependencies]`)
   added. The `dependencies` list and `[dependency-groups] dev` are unchanged.
-- **`tests/`**: 574 passing at sprint close (was the sprint baseline before
-  tickets 003-004 through 003-007). New tests added in `tests/test_transport.py`
-  (3), `tests/test_control.py` (spin-up and current-limit coverage), and
-  `tests/test_devices.py` / `tests/test_hub.py` (14 for the ADC API). The bench
-  script has no `test_` prefix and `testpaths = ["tests"]` prevents collection.
+- **`tests/`**: 619 passing at sprint close. New tests accumulated across
+  tickets: `tests/test_transport.py` (+3, latency fix), `tests/test_devices.py`
+  and `tests/test_hub.py` (+14, ADC API), `tests/test_control.py` (spin-up and
+  current-limit coverage from 003-005/007; replaced/extended by unified governor
+  tests from 003-010: `TestRatioDrivePlateauLatch`, `TestRatioDriveCurrentCapNew`,
+  `TestRatioDriveRatioExactnessNew`, `TestRatioDriveNewTunableDefaults`,
+  `TestRatioDriveLatchHardening` (+5 false-latch regression tests),
+  `TestRatioDriveFastSpinUp` (+3); `TestRatioDriveGenuineRecovery` updated for
+  tuning fix). Auto-scaling tests for `_fit_limit` added in `tests/test_chart.py`
+  or equivalent (+9 from 003-008). The bench script has no `test_` prefix and
+  `testpaths = ["tests"]` prevents collection.
 - **`examples/`**: `velocity_chart.py` gained `--current-limit` and per-motor
-  current display. No other example scripts changed.
+  current display (003-007), then per-axis auto-scaling via `_fit_limit` and
+  removal of `set_aspect("equal")` (003-008). No other example scripts changed.
 
 ---
 

@@ -202,13 +202,13 @@ New tunables (`plateau_threshold_cnts_s2`, `ema_alpha`, `speed_margin_frac`,
   t=0.0s g=360; t=0.2s g=840; t=0.4–1.0s g=1000; t=1.2s g=640; t=1.4s g=476 (LATCH);
   t=1.6–5.8s g=476 stable. PASS.
 
-- [ ] **Load de-rate + recovery (ratio 1.0, current_limit set) — operator
-  assisted**: `RatioDrive(hub, {0:1.0, 1:1.0}, current_limit_ma=<limit>);
-  set_speed(1000)`. Start running; steady-state g≈1000. Operator manually loads
-  a motor. g de-rates; both commanded targets stay in ratio throughout the
-  de-rate. Operator releases the load: g climbs back toward S=1000 within ~1-2 s
-  — NOT stuck at 0 or the de-rated floor. Supply does not trip at any point.
-  Result (pass/fail + brief observed behaviour) recorded in ticket.
+- [x] **Load de-rate + recovery (ratio 1.0, current_limit set) — operator
+  assisted**: PASSED 2026-06-06. Ran `velocity_chart --ratio 1.0 --current-limit
+  1500`; loading a wheel de-rated the pack with the ratio held, and it recovered
+  on release — stakeholder confirmed: "the algorithm seems to work really well.
+  It maintains the ratio very well." (Verified on the build after the latch-
+  hardening fix; the subsequent change only sped up the climb rate, not the
+  de-rate/ratio logic.) Spin-up climb rate then fixed to reach setpoint in ~0.4 s.
 
   **Note**: Operator-assisted load test deferred — requires physical motor load
   during live run. Current cap logic is validated by unit tests
