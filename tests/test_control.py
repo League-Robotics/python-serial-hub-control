@@ -745,6 +745,7 @@ def _make_ratio_drive(
     recovery_accel: float | None = None,
     sat_margin: float = 0.15,
     sat_release_margin: float = 0.07,
+    sat_settle_s: float = 0.0,
     min_scale: float = 0.0,
     deadband: int = 20,
     target_scale: float = 1000.0,
@@ -754,6 +755,11 @@ def _make_ratio_drive(
     The RatioDrive's internal _controllers dict is populated with
     _RecordingController instances so governor math can be tested without
     any network I/O.
+
+    ``sat_settle_s`` defaults to 0.0 (instant saturation) so that existing
+    tests of the saturation gate remain deterministic without requiring extra
+    ticks to elapse the settling window.  Tests that specifically verify the
+    settle-window behaviour pass an explicit positive value.
     """
     fake_hub = _FakeHubForRatio()
     rd = RatioDrive(
@@ -764,6 +770,7 @@ def _make_ratio_drive(
         recovery_accel=recovery_accel,
         sat_margin=sat_margin,
         sat_release_margin=sat_release_margin,
+        sat_settle_s=sat_settle_s,
         min_scale=min_scale,
         deadband=deadband,
     )
@@ -1661,3 +1668,311 @@ class TestRatioDriveVelocityPID:
             assert abs(p - 1.5) < 1e-9
             assert abs(i - 0.3) < 1e-9
             assert abs(d - 0.05) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# RatioDrive — saturation settle window (003-005 fix tests)
+# ---------------------------------------------------------------------------
+
+
+class TestRatioDriveSatSettleConstructor:
+    """sat_settle_s constructor parameter is stored and used."""
+
+    def test_default_sat_settle_s(self) -> None:
+        """Default sat_settle_s is 0.3 seconds."""
+        hub = _FakeHubForRatio()
+        rd = RatioDrive(hub, {0: 1.0, 1: 1.0})
+        assert rd._sat_settle_s == 0.3
+
+    def test_explicit_sat_settle_s(self) -> None:
+        """Explicit sat_settle_s is stored correctly."""
+        hub = _FakeHubForRatio()
+        rd = RatioDrive(hub, {0: 1.0, 1: 1.0}, sat_settle_s=0.5)
+        assert rd._sat_settle_s == 0.5
+
+    def test_sat_settle_zero_disables_window(self) -> None:
+        """sat_settle_s=0 means saturation triggers on the first high-shortfall tick."""
+        weights = {0: 1.0, 1: 1.0}
+        rd, _, _ = _make_ratio_drive(
+            weights,
+            target_scale=1000.0,
+            max_accel=100000.0,
+            sat_margin=0.10,
+            sat_settle_s=0.0,  # instant — old behaviour
+        )
+        rd._scale = 1000.0
+
+        # Single tick: wheel 1 stuck at 0 → shortfall ≈ 1.0 > 0.10 → immediately saturated.
+        bulk = _make_bulk_timed(motor0_velocity=1000, motor1_velocity=0, time_ms=20)
+        rd.update(bulk)
+        assert rd.saturated, "With sat_settle_s=0, saturation should fire on the first tick"
+
+
+class TestRatioDriveAccelLagSpinUp:
+    """Acceleration-lag during spin-up must NOT collapse scale to 0.
+
+    This is the core regression test for ticket 003-005.  The governor uses
+    a settling window (sat_settle_s=0.3 s, the production default) so that
+    transient lag while a motor is accelerating does not trigger saturation.
+    The measured velocity trails the commanded target for several ticks while
+    the motor ramps up — which is physically realistic and the exact scenario
+    that collapsed scale to 0 on the real hub.
+    """
+
+    def test_scale_ramps_up_despite_accel_lag(self) -> None:
+        """With real sat_settle_s=0.3, scale ramps toward S during spin-up.
+
+        Scenario: both motors start at 0, target is S=1000.  Each tick the
+        measured velocity is 0 (maximum lag) for the first 0.25 s — well within
+        the 0.3 s settle window — so the governor should NOT declare saturation
+        and must keep climbing.  After 0.25 s we let measured track g (motor
+        reached speed); the governor should reach S.
+        """
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        sat_settle_s = 0.3
+        dt_ms = 20  # 50 Hz ticks
+
+        rd, _, _ = _make_ratio_drive(
+            weights,
+            target_scale=S,
+            max_accel=6000.0,       # 120 counts/step at 50 Hz
+            recovery_accel=6000.0,
+            sat_margin=0.15,
+            sat_release_margin=0.07,
+            sat_settle_s=sat_settle_s,
+            deadband=0,
+        )
+
+        # Phase 1: measured stays at 0 for 12 ticks (240 ms < 300 ms settle window).
+        # The governor must NOT flag saturation and must keep g climbing.
+        time_ms = 0
+        for tick in range(12):
+            time_ms += dt_ms
+            # Both measured velocities lag completely: still at 0 even as g climbs.
+            bulk = _make_bulk_timed(
+                motor0_velocity=0, motor1_velocity=0, time_ms=time_ms
+            )
+            rd.update(bulk)
+            assert not rd.saturated, (
+                f"Tick {tick}: Governor wrongly entered saturation during spin-up "
+                f"(scale={rd.scale:.1f}). "
+                f"sat_time={rd._sat_time}, sat_flags={rd._sat_flags}"
+            )
+
+        # scale must have climbed above 0 — the motor received sustained commands.
+        scale_after_lag = rd.scale
+        assert scale_after_lag > 0.0, (
+            f"scale collapsed to 0 during accel-lag phase: {scale_after_lag}"
+        )
+
+        # Phase 2: measured now tracks g (motor reached speed). Governor continues up.
+        for _ in range(50):
+            time_ms += dt_ms
+            g = rd.scale
+            bulk = _make_bulk_timed(
+                motor0_velocity=round(g), motor1_velocity=round(g), time_ms=time_ms
+            )
+            rd.update(bulk)
+
+        # After convergence, scale should be close to S.
+        assert rd.scale > 0.7 * S, (
+            f"scale did not converge to S={S} after spin-up: {rd.scale:.1f}"
+        )
+
+    def test_scale_never_collapses_during_spinup(self) -> None:
+        """Scale must be non-decreasing within the settle window during spin-up.
+
+        Models the exact oscillation seen on the real hub: measured=0 while
+        scale tries to climb.  With the settle window the scale should only
+        ever go up (limited by recovery_accel) until the window elapses.
+        Without the fix, scale would collapse to 0 on the very first tick.
+        """
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        sat_settle_s = 0.3
+        dt_ms = 20
+        # Number of ticks strictly inside the settle window (accumulator not yet reached).
+        window_ticks = int(sat_settle_s / (dt_ms / 1000.0))  # 15 ticks at 50 Hz
+
+        rd, _, _ = _make_ratio_drive(
+            weights,
+            target_scale=S,
+            max_accel=6000.0,
+            recovery_accel=6000.0,
+            sat_margin=0.15,
+            sat_settle_s=sat_settle_s,
+            deadband=0,
+        )
+
+        prev_g = rd.scale  # starts at 0
+        time_ms = 0
+        # Run exactly window_ticks ticks — all within the settle window.
+        # During this phase measured stays at 0 but saturation must NOT fire.
+        for tick in range(window_ticks):
+            time_ms += dt_ms
+            bulk = _make_bulk_timed(motor0_velocity=0, motor1_velocity=0, time_ms=time_ms)
+            rd.update(bulk)
+            g = rd.scale
+            assert g >= prev_g - 1e-6, (
+                f"Tick {tick} (within settle window): scale dropped from "
+                f"{prev_g:.2f} to {g:.2f} — collapse without the fix!"
+            )
+            assert not rd.saturated, (
+                f"Tick {tick}: saturation fired inside the settle window "
+                f"(scale={g:.2f}, sat_time={rd._sat_time})"
+            )
+            prev_g = g
+
+        # After window_ticks × 120 counts/tick = 1800 counts, capped at S=1000.
+        assert rd.scale >= min(window_ticks * 6000.0 * (dt_ms / 1000.0), S) - 1e-6, (
+            "scale should have climbed to S during the settle window"
+        )
+        assert rd.scale > 0.0, "scale stayed at 0 — fix did not take effect"
+
+
+class TestRatioDriveGenuineSustainedBottleneck:
+    """Genuine sustained bottleneck still caps the pack after the settle window.
+
+    These tests verify that the settle-window fix does NOT simply disable
+    saturation — it only defers it until the shortfall has persisted for
+    sat_settle_s seconds.
+    """
+
+    def test_sustained_bottleneck_caps_scale(self) -> None:
+        """After sat_settle_s elapses, a persistently slow wheel caps the scale.
+
+        Scenario: wheel 1 can only achieve 40% of g (sustained load).
+        After the settle window, saturation must engage and bring g down.
+        """
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        sat_settle_s = 0.3
+        dt_ms = 20  # 50 Hz
+        settle_ticks = int(sat_settle_s / (dt_ms / 1000.0)) + 1  # 16 ticks
+
+        rd, _, ctrls = _make_ratio_drive(
+            weights,
+            target_scale=S,
+            max_accel=100000.0,   # very fast so g hits S immediately
+            recovery_accel=100000.0,
+            sat_margin=0.15,
+            sat_release_margin=0.07,
+            sat_settle_s=sat_settle_s,
+            deadband=0,
+        )
+        # Pre-warm g to S so we're testing the bottleneck cap, not spin-up.
+        rd._scale = S
+        # Pre-warm sat_time accumulators: set each channel's accumulator just
+        # below the threshold so the NEXT tick of high shortfall triggers saturation.
+        # This lets us verify the mechanism without running settle_ticks spin-up ticks.
+        for ch in weights:
+            rd._sat_time[ch] = sat_settle_s - (dt_ms / 1000.0) * 0.5
+
+        time_ms = 0
+        for _ in range(settle_ticks + 10):
+            time_ms += dt_ms
+            g = rd.scale
+            # Wheel 0 tracks perfectly; wheel 1 only achieves 40% of g.
+            bulk = _make_bulk_timed(
+                motor0_velocity=round(g),
+                motor1_velocity=round(0.4 * g),
+                time_ms=time_ms,
+            )
+            rd.update(bulk)
+
+        # After enough ticks, saturation must have engaged and dragged scale down.
+        assert rd.scale < S * 0.8, (
+            f"Expected scale to drop below {S*0.8:.0f} after sustained bottleneck, "
+            f"got {rd.scale:.1f}"
+        )
+
+    def test_ratio_preserved_under_sustained_bottleneck(self) -> None:
+        """Ratio is preserved at all times even when one wheel is saturated.
+
+        This verifies that the governor's ratio invariance holds both before and
+        after the settle window elapses, throughout a genuine sustained load.
+        """
+        weights = {0: 1.0, 1: 0.75}
+        S = 800.0
+        dt_ms = 20
+
+        rd, _, ctrls = _make_ratio_drive(
+            weights,
+            target_scale=S,
+            max_accel=100000.0,
+            recovery_accel=100000.0,
+            sat_margin=0.15,
+            sat_settle_s=0.0,   # instant saturation — focus is on ratio, not window
+            deadband=0,
+        )
+        rd._scale = S
+
+        time_ms = 0
+        for step in range(30):
+            time_ms += dt_ms
+            g = rd.scale
+            # Wheel 1 lagging: provides 60% of its weight-proportional target.
+            v0 = round(g * weights[0])
+            v1 = round(0.6 * g * weights[1])
+            bulk = _make_bulk_timed(motor0_velocity=v0, motor1_velocity=v1, time_ms=time_ms)
+            rd.update(bulk)
+
+            t0 = rd.commanded_targets.get(0, 0)
+            t1 = rd.commanded_targets.get(1, 0)
+            # Only check ratio when targets are large enough that integer rounding
+            # (±1 count) does not dominate the ratio calculation.
+            if abs(t1) >= 20:
+                actual_ratio = t0 / t1
+                expected_ratio = weights[0] / weights[1]
+                assert abs(actual_ratio - expected_ratio) < 0.05, (
+                    f"Step {step}: ratio {actual_ratio:.4f} vs expected "
+                    f"{expected_ratio:.4f} (t0={t0}, t1={t1})"
+                )
+
+    def test_sat_time_resets_when_shortfall_clears(self) -> None:
+        """The shortfall accumulator resets to 0 when shortfall drops below sat_release_margin.
+
+        This prevents the accumulator from secretly crossing the threshold on
+        the next high-shortfall period when the previous period had already
+        cleared (no memory of previous episode).
+        """
+        weights = {0: 1.0, 1: 1.0}
+        S = 500.0
+        sat_settle_s = 0.5
+        dt_ms = 20
+
+        rd, _, _ = _make_ratio_drive(
+            weights,
+            target_scale=S,
+            max_accel=100000.0,
+            sat_margin=0.15,
+            sat_release_margin=0.07,
+            sat_settle_s=sat_settle_s,
+            deadband=0,
+        )
+        rd._scale = S
+
+        # Run 10 ticks of high shortfall (200 ms) — below the 500 ms settle window.
+        time_ms = 0
+        for _ in range(10):
+            time_ms += dt_ms
+            bulk = _make_bulk_timed(motor0_velocity=S, motor1_velocity=0, time_ms=time_ms)
+            rd.update(bulk)
+
+        # Accumulator should have grown but not triggered saturation.
+        assert not rd.saturated, "Should not be saturated yet (within settle window)"
+        assert rd._sat_time.get(1, 0.0) > 0.0, "Accumulator for ch1 should be non-zero"
+
+        # Now give wheel 1 a full recovery for several ticks (shortfall < release margin).
+        for _ in range(5):
+            time_ms += dt_ms
+            g = rd.scale
+            bulk = _make_bulk_timed(motor0_velocity=round(g), motor1_velocity=round(g), time_ms=time_ms)
+            rd.update(bulk)
+
+        # Accumulator must have been reset to 0 once shortfall cleared.
+        assert rd._sat_time.get(1, 0.0) == 0.0, (
+            f"Accumulator should reset to 0 after shortfall cleared, "
+            f"got {rd._sat_time.get(1)}"
+        )

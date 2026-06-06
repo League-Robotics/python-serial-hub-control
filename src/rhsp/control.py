@@ -293,6 +293,10 @@ class RatioDrive:
         recovery_accel:    Maximum upward slew rate; defaults to ``max_accel``.
         sat_margin:        Shortfall fraction to enter saturation state.
         sat_release_margin: Shortfall fraction below which saturation clears.
+        sat_settle_s:      Seconds the shortfall must continuously exceed
+                           ``sat_margin`` before a wheel is declared saturated.
+                           Prevents transient acceleration lag during spin-up
+                           from triggering saturation.  Default 0.3 s.
         min_scale:         Floor for ``g`` (clamp after slew).
         deadband:          Measured velocity magnitude below which the reading
                            is treated as zero for normalisation.
@@ -315,6 +319,7 @@ class RatioDrive:
         recovery_accel: float | None = None,
         sat_margin: float = 0.15,
         sat_release_margin: float = 0.07,
+        sat_settle_s: float = 0.3,
         min_scale: float = 0.0,
         deadband: int = 20,
         cpr: float | None = None,
@@ -327,6 +332,7 @@ class RatioDrive:
         self._recovery_accel = recovery_accel if recovery_accel is not None else max_accel
         self._sat_margin = sat_margin
         self._sat_release_margin = sat_release_margin
+        self._sat_settle_s = sat_settle_s
         self._min_scale = min_scale
         self._deadband = deadband
         self._cpr = cpr
@@ -346,6 +352,11 @@ class RatioDrive:
         self._saturated: bool = False
         # Per-wheel saturation flags (keyed by channel).
         self._sat_flags: dict[int, bool] = {}
+        # Per-wheel accumulated time-in-shortfall (seconds). Counts up while
+        # shortfall > sat_margin and resets to 0 when shortfall < sat_release_margin.
+        # A wheel enters the saturated state only after this accumulator exceeds
+        # sat_settle_s, preventing transient acceleration lag from triggering saturation.
+        self._sat_time: dict[int, float] = {}
 
         # Timestamp of the previous tick (ms); None on the first tick.
         self._prev_time_ms: int | None = None
@@ -399,8 +410,9 @@ class RatioDrive:
         """
         with self._lock:
             self._weights = dict(weights)
-            # Reset saturation flags for channels that changed.
+            # Reset saturation flags and accumulators for channels that changed.
             self._sat_flags = {}
+            self._sat_time = {}
 
     def set_ratio(self, ratio: float, pair: tuple[int, int] = (0, 1)) -> None:
         """Convenience shorthand: set ``{pair[0]: 1.0, pair[1]: ratio}``.
@@ -415,9 +427,11 @@ class RatioDrive:
         with self._lock:
             self._weights[pair[0]] = 1.0
             self._weights[pair[1]] = ratio
-            # Reset saturation flags for the affected channels.
+            # Reset saturation flags and accumulators for the affected channels.
             self._sat_flags.pop(pair[0], None)
             self._sat_flags.pop(pair[1], None)
+            self._sat_time.pop(pair[0], None)
+            self._sat_time.pop(pair[1], None)
 
     def stop(self, brake: bool = False) -> None:
         """Command all wheels to zero and set ``target_scale = 0``.
@@ -588,10 +602,19 @@ class RatioDrive:
                 was_sat = self._sat_flags.get(ch, False)
                 if was_sat:
                     # Leave saturation only when shortfall drops below release margin.
-                    self._sat_flags[ch] = shortfall >= self._sat_release_margin
+                    if shortfall < self._sat_release_margin:
+                        self._sat_flags[ch] = False
+                        self._sat_time[ch] = 0.0
+                    # else: remain saturated (hysteresis — no accumulator change needed)
                 else:
-                    # Enter saturation when shortfall exceeds entry margin.
-                    self._sat_flags[ch] = shortfall > self._sat_margin
+                    # Accumulate time-in-shortfall; enter saturation only after settle window.
+                    if shortfall > self._sat_margin:
+                        self._sat_time[ch] = self._sat_time.get(ch, 0.0) + dt
+                        if self._sat_time[ch] >= self._sat_settle_s:
+                            self._sat_flags[ch] = True
+                    else:
+                        # Shortfall below entry threshold — reset accumulator.
+                        self._sat_time[ch] = 0.0
 
             saturated_channels = [ch for ch, f in self._sat_flags.items() if f]
             self._saturated = len(saturated_channels) > 0
