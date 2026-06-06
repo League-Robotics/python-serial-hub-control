@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: 'Hub-managed LED: heartbeat re-assert + status-clear on connect'
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -39,37 +39,37 @@ an optional `on_error` callback rather than silently cleared. Only the routine
 
 ## Acceptance Criteria
 
-- [ ] `Hub` stores `_desired_led_pattern: list[tuple[int,int,int,int]] | None`,
+- [x] `Hub` stores `_desired_led_pattern: list[tuple[int,int,int,int]] | None`,
       initialised to `None` in `__init__`.
-- [ ] `hub.set_led_color(r, g, b)` stores the 16-step solid pattern as
+- [x] `hub.set_led_color(r, g, b)` stores the 16-step solid pattern as
       `_desired_led_pattern` AND sends it immediately (preserving the existing
       correct `[T, B, G, R]` byte order and current clear-status behaviour).
-- [ ] `hub.clear_led_color()` sets `_desired_led_pattern = None`; the LED
+- [x] `hub.clear_led_color()` sets `_desired_led_pattern = None`; the LED
       returns to firmware default on the next heartbeat (no immediate send
       required).
-- [ ] `hub.init_peripherals()` calls `session.get_module_status(clear=True)`
+- [x] `hub.init_peripherals()` calls `session.get_module_status(clear=True)`
       (or equivalent) before motor/servo init commands, so the connect-time
       `KeepAliveTimeout | FailSafe` latch is drained before any LED command.
-- [ ] Keep-alive heartbeat: after each `keep_alive()` call, if
+- [x] Keep-alive heartbeat: after each `keep_alive()` call, if
       `_desired_led_pattern is not None`, read module status; if ONLY
       `KeepAliveTimeout | FailSafe` bits are set (no non-routine bits), clear +
       re-assert the stored pattern.
-- [ ] If any non-routine fault bit (over-temp, battery-low) is present in the
+- [x] If any non-routine fault bit (over-temp, battery-low) is present in the
       status word, the heartbeat logs a WARNING, calls `on_error(fault_flags)`
       if an `on_error` callback was provided, and does NOT clear/re-assert the
       pattern (per OQ1 resolution).
-- [ ] An optional `on_error` hook is accepted by `Hub` (or `start_keepalive`)
+- [x] An optional `on_error` hook is accepted by `Hub` (or `start_keepalive`)
       and invoked with the raw fault flags when a non-routine fault is detected.
-- [ ] FakeHub unit test (a): heartbeat re-asserts the stored pattern after a
+- [x] FakeHub unit test (a): heartbeat re-asserts the stored pattern after a
       simulated `KeepAliveTimeout` latch; verify `set_module_led_pattern` is
       called again without caller intervention.
-- [ ] FakeHub unit test (b): `init_peripherals()` triggers a
+- [x] FakeHub unit test (b): `init_peripherals()` triggers a
       `get_module_status(clear=True)` call before any motor/servo init; verify
       via call-order assertions on FakeHub.
-- [ ] FakeHub unit test (c): simulated over-temp or battery-low fault flag is
+- [x] FakeHub unit test (c): simulated over-temp or battery-low fault flag is
       NOT cleared; `set_module_led_pattern` is NOT re-called; the warning is
       logged; `on_error` callback is invoked.
-- [ ] Live-hub validation criterion: after a single `hub.set_led_color()` call,
+- [x] Live-hub validation criterion: after a single `hub.set_led_color()` call,
       the LED holds the requested solid colour for >= 10 s with no caller
       re-sends. LED is non-blinking immediately after `init_peripherals()`.
 
