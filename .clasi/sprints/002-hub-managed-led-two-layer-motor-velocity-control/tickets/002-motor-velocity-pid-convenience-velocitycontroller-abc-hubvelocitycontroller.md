@@ -1,11 +1,11 @@
 ---
 id: '002'
-title: 'Motor velocity-PID convenience + VelocityController ABC + HubVelocityController'
-status: open
+title: Motor velocity-PID convenience + VelocityController ABC + HubVelocityController
+status: done
 use-cases:
-  - SUC-004
+- SUC-004
 depends-on:
-  - '001'
+- '001'
 github-issue: ''
 issue: plan-two-layer-motor-velocity-control-on-hub-pid-host-side-ratio-coordinator.md
 completes_issue: false
@@ -33,22 +33,23 @@ This ticket adds the foundation of the host-side velocity control layer:
 
 ## Acceptance Criteria
 
-- [ ] `motor.set_velocity_pid(p: float, i: float, d: float) -> None` added to
+- [x] `motor.set_velocity_pid(p: float, i: float, d: float) -> None` added to
       `Motor`: delegates to
       `session.set_motor_pid_coefficients(self.address, self.channel, ClosedLoopMode.VELOCITY, p, i, d)`.
-- [ ] `motor.get_velocity_pid() -> tuple[float, float, float]` added to `Motor`:
+- [x] `motor.get_velocity_pid() -> tuple[float, float, float]` added to `Motor`:
       delegates to
       `session.get_motor_pid_coefficients(self.address, self.channel, ClosedLoopMode.VELOCITY)`.
-- [ ] `VelocityController` ABC defined in `src/rhsp/control.py` with exactly these
+- [x] `VelocityController` ABC defined in `src/rhsp/control.py` with exactly these
       five members:
       - `attach(self) -> None`
       - `command(self, target_counts_s: int) -> None`
       - `measured(self, bulk) -> int`
       - `detach(self, disable: bool = True) -> None`
       - `available: bool` (abstract property)
-- [ ] `HubVelocityController(hub: Hub, channel: int)` in `src/rhsp/control.py`:
+- [x] `HubVelocityController(hub: Hub, channel: int)` in `src/rhsp/control.py`:
       - `attach()`: records the motor's current mode; calls
         `motor.set_mode(MotorMode.CONSTANT_VELOCITY, float_at_zero=True)`;
+        calls `motor.set_target_velocity(0)` (required by fw before enable);
         calls `motor.enable()`.
       - `command(target_counts_s)`: clamps argument to int16 range
         `[-32767, 32767]`, calls `motor.set_target_velocity(clamped)`.
@@ -57,7 +58,7 @@ This ticket adds the foundation of the host-side velocity control layer:
         restores the motor mode that was recorded in `attach()`.
       - `available: bool`: property returning `True` (hub always supports
         `CONSTANT_VELOCITY` on fw 1.8.2; the live example does a runtime probe).
-- [ ] FakeHub unit tests in `tests/test_control.py`:
+- [x] FakeHub unit tests in `tests/test_control.py`:
       - `set_velocity_pid` / `get_velocity_pid`: assert correct delegation to
         session methods with correct address, channel, and `ClosedLoopMode.VELOCITY`;
         assert Q16 passthrough is handled by the session layer (no double-conversion).

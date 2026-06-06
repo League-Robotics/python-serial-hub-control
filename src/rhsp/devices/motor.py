@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from rhsp.enums import MotorMode
+from rhsp.enums import ClosedLoopMode, MotorMode
 
 if TYPE_CHECKING:
     from rhsp.devices.bulk import BulkInputData
@@ -134,6 +134,42 @@ class Motor:
         """
         attr = f"motor{self.channel}_velocity"
         return getattr(hub_bulk, attr)
+
+    # ------------------------------------------------------------------
+    # PID coefficients
+    # ------------------------------------------------------------------
+
+    def set_velocity_pid(self, p: float, i: float, d: float) -> None:
+        """Set the velocity closed-loop PID coefficients for this motor channel.
+
+        Delegates directly to
+        :meth:`~rhsp.session.Session.set_motor_pid_coefficients` with
+        :attr:`~rhsp.enums.ClosedLoopMode.VELOCITY`.  Q16 encoding is handled
+        by the session layer — pass plain floating-point coefficients.
+
+        Parameters:
+            p: Proportional gain.
+            i: Integral gain.
+            d: Derivative gain.
+        """
+        self.session.set_motor_pid_coefficients(
+            self.address, self.channel, ClosedLoopMode.VELOCITY, p, i, d
+        )
+
+    def get_velocity_pid(self) -> tuple[float, float, float]:
+        """Read the velocity closed-loop PID coefficients for this motor channel.
+
+        Delegates directly to
+        :meth:`~rhsp.session.Session.get_motor_pid_coefficients` with
+        :attr:`~rhsp.enums.ClosedLoopMode.VELOCITY`.  The session layer handles
+        Q16 decoding — the returned values are plain floating-point coefficients.
+
+        Returns:
+            A ``(p, i, d)`` tuple of floating-point PID coefficients.
+        """
+        return self.session.get_motor_pid_coefficients(
+            self.address, self.channel, ClosedLoopMode.VELOCITY
+        )
 
     # ------------------------------------------------------------------
     # Dunder
