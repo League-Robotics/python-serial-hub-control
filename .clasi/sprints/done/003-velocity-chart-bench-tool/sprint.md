@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: velocity_chart bench tool
-status: planning-docs
+status: done
 branch: sprint/003-velocity-chart-bench-tool
 use-cases:
 - SUC-001
