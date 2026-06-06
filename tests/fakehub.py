@@ -53,6 +53,10 @@ _QUERY_INTERFACE_TYPE: int = 0x7F07
 _DISCOVERY_RSP_TYPE: int = 0xFF0F
 _QUERY_INTERFACE_RSP_TYPE: int = 0xFF07
 
+# GetModuleStatus absolute packet-type id and its RSP id.
+_GET_MODULE_STATUS_TYPE: int = 0x7F03
+_GET_MODULE_STATUS_RSP_TYPE: int = 0xFF03
+
 # Default hub source address used in all responses.
 _HUB_SRC: int = 1
 
@@ -90,11 +94,20 @@ class FakeHub:
         self.requests: list[RawPacket] = []
         self.payloads: dict[str, dict] = {}
 
+        # Ordered log of resolved command names (None for unknown packet types).
+        # Use this for call-order assertions.
+        self.call_log: list[str | None] = []
+
         # NACK overrides: command_name → nack_code.
         self._nack_config: dict[str, int] = {}
 
         # RSP overrides: command_name → field-value dict for the response.
         self._rsp_config: dict[str, dict] = {}
+
+        # Module status override: statusWord and motorAlerts returned by
+        # GetModuleStatus.  A list is used so multiple sequential calls each
+        # consume the next entry (last entry is reused once exhausted).
+        self._module_status_queue: list[tuple[int, int]] = []
 
         # Background thread state.
         self._thread: threading.Thread | None = None
@@ -136,6 +149,30 @@ class FakeHub:
             Numeric NACK code to include in the NACK frame payload.
         """
         self._nack_config[command_name] = nack_code
+
+    def set_module_status(
+        self,
+        status_word: int,
+        motor_alerts: int = 0,
+    ) -> None:
+        """Enqueue a ``GetModuleStatus`` response with specific status bits.
+
+        Each call to this method appends one entry to an internal queue.
+        When FakeHub receives ``GetModuleStatus``, it pops the first entry
+        from the queue.  If the queue is exhausted, the last enqueued entry
+        is reused indefinitely.  By default (no calls to this method) the
+        response is ``statusWord=0, motorAlerts=0``.
+
+        Parameters
+        ----------
+        status_word:
+            Value for the ``statusWord`` byte (see
+            :class:`~rhsp.enums.ModuleStatusBits`).
+        motor_alerts:
+            Value for the ``motorAlerts`` byte (see
+            :class:`~rhsp.enums.MotorStatusBits`).
+        """
+        self._module_status_queue.append((status_word, motor_alerts))
 
     # ------------------------------------------------------------------
     # Processing
@@ -222,6 +259,9 @@ class FakeHub:
         # Resolve the command name (may be None for unknown packet types).
         cmd_name = _PACKET_TYPE_TO_CMD.get(pkt.packet_type)
 
+        # Record in the ordered call log for call-order assertions.
+        self.call_log.append(cmd_name)
+
         # Decode the payload when a matching command descriptor exists.
         if cmd_name and cmd_name in COMMANDS:
             cmd = COMMANDS[cmd_name]
@@ -238,7 +278,7 @@ class FakeHub:
             self._inject_nack(pkt, nack_code)
             return
 
-        # Check for a configured RSP override.
+        # Check for a configured RSP override (takes priority over default handler).
         if cmd_name and cmd_name in self._rsp_config:
             fields = self._rsp_config.pop(cmd_name)
             self._reply_rsp(pkt, cmd_name, fields)
@@ -251,6 +291,8 @@ class FakeHub:
             self._reply_discovery(pkt)
         elif pkt.packet_type == _QUERY_INTERFACE_TYPE:
             self._reply_query_interface(pkt)
+        elif pkt.packet_type == _GET_MODULE_STATUS_TYPE:
+            self._reply_module_status(pkt)
         else:
             # Default: ACK for any command whose catalogue reply_kind is "ack";
             # for unknown or "response" commands, also send ACK as a safe default.
@@ -273,6 +315,37 @@ class FakeHub:
             msg=0,
             ref=req.msg_num,
             ptype=_ACK_TYPE,
+            payload=payload,
+        )
+        self._transport.inject(frame)
+
+    def _reply_module_status(self, req: RawPacket) -> None:
+        """Inject a ``GetModuleStatus_RSP`` frame.
+
+        The ``statusWord`` and ``motorAlerts`` values are taken from the
+        internal queue (see :meth:`set_module_status`).  If the queue is
+        empty the response is ``statusWord=0, motorAlerts=0``.  The last
+        queued entry is reused once the queue is exhausted.
+        """
+        if self._module_status_queue:
+            # Peek at the first entry; do not pop (last entry stays sticky).
+            entry = self._module_status_queue[0]
+            if len(self._module_status_queue) > 1:
+                self._module_status_queue.pop(0)
+            status_word, motor_alerts = entry
+        else:
+            status_word, motor_alerts = 0, 0
+
+        payload = encode_payload(
+            RESPONSES_BY_ID[_GET_MODULE_STATUS_RSP_TYPE].fields,
+            {"statusWord": status_word, "motorAlerts": motor_alerts},
+        )
+        frame = build_frame(
+            dest=req.src,
+            src=self._src_addr,
+            msg=0,
+            ref=req.msg_num,
+            ptype=_GET_MODULE_STATUS_RSP_TYPE,
             payload=payload,
         )
         self._transport.inject(frame)
