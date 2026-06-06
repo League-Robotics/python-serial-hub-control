@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from rhsp.enums import ClosedLoopMode, MotorMode
+from rhsp.enums import ADCChannel, ClosedLoopMode, MotorMode
 
 if TYPE_CHECKING:
     from rhsp.devices.bulk import BulkInputData
@@ -134,6 +134,26 @@ class Motor:
         """
         attr = f"motor{self.channel}_velocity"
         return getattr(hub_bulk, attr)
+
+    # ------------------------------------------------------------------
+    # Current sensing via GetADC
+    # ------------------------------------------------------------------
+
+    def get_current_ma(self) -> int:
+        """Read the current draw of this motor channel in milliamps.
+
+        Uses ``GetADC`` with the channel-specific ADC monitor
+        (``ADC_Motor0`` + channel index), which is the correct method on
+        fw 1.8.2.  The ``GetBulkInputData`` response on fw 1.8.2 is only
+        ~34 bytes and does not include the current monitor fields; those
+        bulk fields have been removed from :class:`~rhsp.devices.bulk.BulkInputData`.
+
+        Returns:
+            Motor current in milliamps (non-negative integer at idle; rises
+            under load).
+        """
+        adc_channel = ADCChannel.ADC_Motor0 + self.channel
+        return self.session.get_adc(self.address, adc_channel)
 
     # ------------------------------------------------------------------
     # PID coefficients

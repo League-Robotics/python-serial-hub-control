@@ -146,3 +146,93 @@ def test_transport_protocol_is_runtime_checkable() -> None:
     except TypeError as exc:
         pytest.fail(f"Transport is not runtime_checkable: {exc}")
     assert result is True
+
+
+# ---------------------------------------------------------------------------
+# SerialTransport.read — prompt-read behaviour (hardware-free)
+# ---------------------------------------------------------------------------
+
+
+class _FakeSerial:
+    """Minimal stub that replaces ``serial.Serial`` inside ``SerialTransport``.
+
+    Tracks every call to ``read(n)`` and records the argument so tests can
+    verify which path was taken (in_waiting path vs. read(1) fallback).
+    """
+
+    def __init__(self, buffered: bytes = b"") -> None:
+        self._buffered = bytearray(buffered)
+        self.read_calls: list[int] = []  # argument passed to each read()
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self._buffered)
+
+    def read(self, n: int) -> bytes:
+        self.read_calls.append(n)
+        chunk = bytes(self._buffered[:n])
+        del self._buffered[:n]
+        return chunk
+
+
+def _make_serial_transport_with_stub(stub: _FakeSerial) -> SerialTransport:
+    """Construct a ``SerialTransport`` without opening a real port.
+
+    We bypass ``__init__`` (which would call ``serial.Serial(port=...)``) and
+    inject the stub directly, using the same ``_serial`` attribute name that
+    ``SerialTransport.read`` accesses.
+    """
+    t = object.__new__(SerialTransport)
+    t._serial = stub  # type: ignore[attr-defined]
+    return t
+
+
+def test_serial_transport_read_uses_in_waiting_path() -> None:
+    """When bytes are already buffered, read() returns them without over-reading.
+
+    The in_waiting path must call ``read(min(n, in_waiting))`` so it returns
+    immediately without waiting for *n* bytes.  The argument passed to the
+    underlying ``read()`` must be ``<= in_waiting``, not the full ``n``.
+    """
+    stub = _FakeSerial(b"ABCDE")  # 5 bytes buffered
+    t = _make_serial_transport_with_stub(stub)
+
+    result = t.read(512)  # ask for much more than available
+
+    assert result == b"ABCDE", "Should return all 5 buffered bytes"
+    assert len(stub.read_calls) == 1, "Should make exactly one read() call"
+    assert stub.read_calls[0] == 5, (
+        f"read() should have been called with 5 (in_waiting), got {stub.read_calls[0]}"
+    )
+
+
+def test_serial_transport_read_in_waiting_path_respects_n() -> None:
+    """When in_waiting > n, read() asks for at most n bytes."""
+    stub = _FakeSerial(b"ABCDEFGH")  # 8 bytes buffered
+    t = _make_serial_transport_with_stub(stub)
+
+    result = t.read(3)
+
+    assert result == b"ABC"
+    assert stub.read_calls == [3], (
+        f"read() should have been called with min(3, 8)=3, got {stub.read_calls}"
+    )
+
+
+def test_serial_transport_read_fallback_to_single_byte_when_empty() -> None:
+    """When no bytes are buffered, read() falls back to a single read(1).
+
+    This ensures the first arriving byte wakes us promptly rather than
+    blocking the full port timeout waiting for n bytes.
+    """
+    stub = _FakeSerial(b"")  # nothing buffered yet
+    t = _make_serial_transport_with_stub(stub)
+
+    # The stub returns b"" for read(1) since the buffer is empty — that's fine,
+    # we're only verifying the call argument, not real serial I/O.
+    result = t.read(512)
+
+    assert result == b"", "Empty buffer should return empty bytes"
+    assert stub.read_calls == [1], (
+        f"Fallback should call read(1), not read(512); got read_calls={stub.read_calls}"
+    )
