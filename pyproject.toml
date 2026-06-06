@@ -1,6 +1,6 @@
 [project]
 name = "rhsp"
-version = "0.20260606.2"
+version = "0.20260606.3"
 description = "Pure-Python driver for the REV Robotics Expansion/Control Hub serial protocol (RHSP / DEKA interface)"
 readme = "README.md"
 authors = [
@@ -23,7 +23,9 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/League-Robotics/python-serial-hub-control"
 Repository = "https://github.com/League-Robotics/python-serial-hub-control"
+Issues = "https://github.com/League-Robotics/python-serial-hub-control/issues"
 
 [dependency-groups]
 dev = [

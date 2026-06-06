@@ -16,13 +16,33 @@ motors, servos, digital I/O, analog inputs, the on-board IMU, and I2C sensors
 - A REV Expansion/Control Hub connected over USB
 - [`uv`](https://docs.astral.sh/uv/) for dependency management
 
-## Install / set up
+## Installation
 
-This project is managed with **uv**. To create the environment and install the
-package (editable) with its dependencies:
+Install the latest version directly from the repository:
 
 ```bash
-uv sync            # create .venv and install runtime deps
+pip install "git+https://github.com/League-Robotics/python-serial-hub-control.git"
+```
+
+or, with [`uv`](https://docs.astral.sh/uv/):
+
+```bash
+uv pip install "git+https://github.com/League-Robotics/python-serial-hub-control.git"
+```
+
+The only runtime dependency is `pyserial`. To also pull in the optional plotting
+extras used by the `velocity_chart` bench tool (`matplotlib`, `numpy`):
+
+```bash
+pip install "rhsp[bench] @ git+https://github.com/League-Robotics/python-serial-hub-control.git"
+```
+
+### Development setup
+
+For working on the package itself, this project is managed with **uv**:
+
+```bash
+uv sync            # create .venv and install runtime deps (editable)
 uv sync --dev      # also install dev tools (pytest)
 ```
 

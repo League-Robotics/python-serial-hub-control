@@ -40,7 +40,15 @@ from .enums import (  # noqa: F401
 from .devices.bulk import BulkInputData, ModuleStatus  # noqa: F401
 from .control import RatioDrive, VelocityController, HubVelocityController  # noqa: F401
 
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+try:
+    __version__ = _pkg_version("rhsp")
+except PackageNotFoundError:  # pragma: no cover - running from an uninstalled source tree
+    __version__ = "0.0.0+unknown"
+
 __all__ = [
+    "__version__",
     # discovery / connection
     "connect",
     "enumerate_hubs",
