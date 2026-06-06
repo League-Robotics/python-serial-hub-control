@@ -2353,3 +2353,286 @@ class TestRatioDriveCurrentLimitConstructor:
         cur = rd.last_current_ma
         assert cur.get(0) == 300, f"Expected 300 mA for ch0, got {cur.get(0)}"
         assert cur.get(1) == 400, f"Expected 400 mA for ch1, got {cur.get(1)}"
+
+
+# ---------------------------------------------------------------------------
+# RatioDrive — limit-cycle convergence tests (003-009 fix)
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_tick(
+    rd: RatioDrive,
+    *,
+    time_ms: int,
+    motor0_v: int,
+    motor1_v: int,
+) -> None:
+    """Feed a single synthetic tick to `rd` without touching hardware."""
+    bulk = _make_bulk_timed(
+        motor0_velocity=motor0_v,
+        motor1_velocity=motor1_v,
+        time_ms=time_ms,
+    )
+    rd.update(bulk)
+
+
+class TestRatioDriveLimitCycleConvergence:
+    """003-009: Governor converges at the bottleneck equilibrium instead of cycling to S.
+
+    Setup: weights={0:1.0, 1:5.0}, S=1000, motor1 physically pinned at 2500 cnt/s
+    (normalised n1_max=500).  The pack should settle at g≈500 (motor0=500,
+    motor1=2500) and STAY there — not oscillate back to g=1000.
+    """
+
+    def test_g_converges_to_bottleneck(self) -> None:
+        """g settles near the bottleneck normalised speed (~500) and stays there.
+
+        Motor1 weight=5.0; physical max=2500 cnt/s so n1_max=500.  After the
+        initial cap-down, g must remain within a small band around 500 for
+        at least 50 consecutive ticks — no swing back to S=1000.
+        """
+        weights = {0: 1.0, 1: 5.0}
+        S = 1000.0
+        n1_max = 500  # motor1 physical cap (normalised: 2500/5)
+        dt_ms = 20
+        sat_settle_s = 0.3
+        recovery_accel = 6000.0
+        max_accel = 6000.0
+
+        rd, _, _ = _make_ratio_drive(
+            weights,
+            target_scale=S,
+            max_accel=max_accel,
+            recovery_accel=recovery_accel,
+            sat_margin=0.15,
+            sat_release_margin=0.07,
+            sat_settle_s=sat_settle_s,
+            deadband=0,
+        )
+
+        # Pre-warm: start with g at S (as if motors had already been running).
+        rd._scale = S
+
+        time_ms = 0
+        # Phase 1: Run until the governor converges (~2s should be plenty).
+        # Motor0 tracks g perfectly; motor1 is pinned at n1_max=500.
+        for _ in range(100):
+            time_ms += dt_ms
+            g = rd.scale
+            v0 = round(g * weights[0])       # motor0 perfectly tracks
+            v1 = min(round(g * weights[1]), 2500)  # motor1 capped at 2500 cnt/s
+            n1_measured = v1  # raw velocity
+            _synthetic_tick(rd, time_ms=time_ms, motor0_v=v0, motor1_v=v1)
+
+        # After convergence, g must be near n1_max=500.
+        g_converged = rd.scale
+        tolerance = 50  # ±50 counts/s around 500
+        assert abs(g_converged - n1_max) <= tolerance, (
+            f"Expected g≈{n1_max} after convergence, got {g_converged:.1f}"
+        )
+
+        # Phase 2: Run 50 more ticks and verify g STAYS near 500 — no limit cycle.
+        g_values_post = []
+        for _ in range(50):
+            time_ms += dt_ms
+            g = rd.scale
+            v0 = round(g * weights[0])
+            v1 = min(round(g * weights[1]), 2500)
+            _synthetic_tick(rd, time_ms=time_ms, motor0_v=v0, motor1_v=v1)
+            g_values_post.append(rd.scale)
+
+        max_g_post = max(g_values_post)
+        assert max_g_post < S * 0.7, (
+            f"Limit cycle detected: g climbed to {max_g_post:.1f} after convergence "
+            f"(should stay near {n1_max}, never return to S={S})"
+        )
+        # The band should be narrow — no large-amplitude oscillation.
+        band = max(g_values_post) - min(g_values_post)
+        assert band < 50, (
+            f"g oscillation band {band:.1f} is too large after convergence "
+            f"(expected < 50 counts/s ripple)"
+        )
+
+    def test_ratio_preserved_at_equilibrium(self) -> None:
+        """At the bottleneck equilibrium, commanded ratio stays exact.
+
+        Even when g is capped at the bottleneck, t1/t0 == w1/w0 == 5.0.
+        """
+        weights = {0: 1.0, 1: 5.0}
+        S = 1000.0
+        dt_ms = 20
+
+        rd, _, _ = _make_ratio_drive(
+            weights,
+            target_scale=S,
+            max_accel=6000.0,
+            recovery_accel=6000.0,
+            sat_margin=0.15,
+            sat_release_margin=0.07,
+            sat_settle_s=0.3,
+            deadband=0,
+        )
+        rd._scale = S
+
+        time_ms = 0
+        # Run to convergence (~2s).
+        for _ in range(100):
+            time_ms += dt_ms
+            g = rd.scale
+            v0 = round(g)
+            v1 = min(round(g * 5.0), 2500)
+            _synthetic_tick(rd, time_ms=time_ms, motor0_v=v0, motor1_v=v1)
+
+        # Check ratio over the next 20 ticks.
+        for step in range(20):
+            time_ms += dt_ms
+            g = rd.scale
+            v0 = round(g)
+            v1 = min(round(g * 5.0), 2500)
+            _synthetic_tick(rd, time_ms=time_ms, motor0_v=v0, motor1_v=v1)
+
+            t0 = rd.commanded_targets.get(0, 0)
+            t1 = rd.commanded_targets.get(1, 0)
+            if t0 > 0 and t1 > 0:
+                actual_ratio = t1 / t0
+                assert abs(actual_ratio - 5.0) < 0.1, (
+                    f"Step {step}: ratio {actual_ratio:.3f} != 5.0 at equilibrium "
+                    f"(t0={t0}, t1={t1}, g={rd.scale:.1f})"
+                )
+
+
+class TestRatioDriveGenuineRecovery:
+    """003-009: After bottleneck clears, g climbs back toward S within ~1-2s."""
+
+    def test_g_recovers_when_bottleneck_clears(self) -> None:
+        """After motor1's speed cap is removed, g climbs back to S.
+
+        Phase 1: bottleneck at n1_max=500 → g converges to ~500.
+        Phase 2: bottleneck cleared (motor1 can now track fully) → g must
+        climb back toward S=1000 within ~2s (100 ticks at 50 Hz).
+        """
+        weights = {0: 1.0, 1: 5.0}
+        S = 1000.0
+        dt_ms = 20
+        probe_step = 10.0
+
+        rd, _, _ = _make_ratio_drive(
+            weights,
+            target_scale=S,
+            max_accel=6000.0,
+            recovery_accel=6000.0,
+            sat_margin=0.15,
+            sat_release_margin=0.07,
+            sat_settle_s=0.3,
+            deadband=0,
+        )
+        rd._scale = S
+
+        time_ms = 0
+        # Phase 1: run with bottleneck until convergence.
+        for _ in range(100):
+            time_ms += dt_ms
+            g = rd.scale
+            v0 = round(g)
+            v1 = min(round(g * 5.0), 2500)
+            _synthetic_tick(rd, time_ms=time_ms, motor0_v=v0, motor1_v=v1)
+
+        g_at_bottleneck = rd.scale
+        assert abs(g_at_bottleneck - 500) <= 50, (
+            f"Expected g≈500 after bottleneck phase, got {g_at_bottleneck:.1f}"
+        )
+
+        # Phase 2: bottleneck cleared — motor1 can now achieve its full target.
+        for _ in range(150):  # up to 3s for full recovery
+            time_ms += dt_ms
+            g = rd.scale
+            # Motor1 now tracks its commanded target (no physical cap).
+            v0 = round(g)
+            v1 = round(g * 5.0)  # no cap
+            _synthetic_tick(rd, time_ms=time_ms, motor0_v=v0, motor1_v=v1)
+
+        g_recovered = rd.scale
+        assert g_recovered > S * 0.9, (
+            f"Expected g to recover above {S*0.9:.0f} after bottleneck cleared, "
+            f"got {g_recovered:.1f}"
+        )
+
+    def test_recovery_is_gradual_not_instant(self) -> None:
+        """After bottleneck clears, g climbs at probe_step rate, not instant jump.
+
+        Recovery at default probe_step=10 counts/tick should take roughly
+        50 ticks (1s at 50 Hz) to climb 500 counts — not happen in 1-2 ticks.
+        """
+        weights = {0: 1.0, 1: 5.0}
+        S = 1000.0
+        dt_ms = 20
+        probe_step = 10.0
+
+        rd, _, _ = _make_ratio_drive(
+            weights,
+            target_scale=S,
+            max_accel=6000.0,
+            recovery_accel=6000.0,
+            sat_margin=0.15,
+            sat_release_margin=0.07,
+            sat_settle_s=0.3,
+            deadband=0,
+        )
+        rd._scale = S
+
+        time_ms = 0
+        # Converge at bottleneck.
+        for _ in range(100):
+            time_ms += dt_ms
+            g = rd.scale
+            v0 = round(g)
+            v1 = min(round(g * 5.0), 2500)
+            _synthetic_tick(rd, time_ms=time_ms, motor0_v=v0, motor1_v=v1)
+
+        g_at_convergence = rd.scale
+
+        # Start recovery: sample g after just 5 ticks.
+        for _ in range(5):
+            time_ms += dt_ms
+            g = rd.scale
+            v0 = round(g)
+            v1 = round(g * 5.0)
+            _synthetic_tick(rd, time_ms=time_ms, motor0_v=v0, motor1_v=v1)
+
+        g_after_5 = rd.scale
+        # After only 5 ticks, g should NOT have jumped to S — recovery is gradual.
+        # With probe_step=10 and 5 ticks: expected climb ≤ 5*recovery_accel*dt = 5*120=600
+        # but also bounded by probe logic, so expect g well below S.
+        assert g_after_5 < S * 0.8, (
+            f"Recovery was too fast — g jumped to {g_after_5:.1f} in 5 ticks "
+            f"(expected gradual climb from {g_at_convergence:.1f})"
+        )
+
+
+class TestRatioDriveProbeParameters:
+    """Constructor parameters probe_step and probe_settle_ticks are stored."""
+
+    def test_probe_step_default(self) -> None:
+        hub = _FakeHubForRatio()
+        rd = RatioDrive(hub, {0: 1.0, 1: 1.0})
+        assert rd._probe_step == 10.0
+
+    def test_probe_step_explicit(self) -> None:
+        hub = _FakeHubForRatio()
+        rd = RatioDrive(hub, {0: 1.0, 1: 1.0}, probe_step=5.0)
+        assert rd._probe_step == 5.0
+
+    def test_probe_settle_ticks_default(self) -> None:
+        hub = _FakeHubForRatio()
+        rd = RatioDrive(hub, {0: 1.0, 1: 1.0})
+        assert rd._probe_settle_ticks == 5
+
+    def test_probe_settle_ticks_explicit(self) -> None:
+        hub = _FakeHubForRatio()
+        rd = RatioDrive(hub, {0: 1.0, 1: 1.0}, probe_settle_ticks=10)
+        assert rd._probe_settle_ticks == 10
+
+    def test_learned_bottleneck_initially_none(self) -> None:
+        hub = _FakeHubForRatio()
+        rd = RatioDrive(hub, {0: 1.0, 1: 1.0})
+        assert rd._learned_bottleneck is None

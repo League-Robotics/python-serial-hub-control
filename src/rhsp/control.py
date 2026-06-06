@@ -273,8 +273,18 @@ class RatioDrive:
         2. Normalise: ``n_i = sign(w_i) * v_i / |w_i|`` (deadband applied first).
         3. Compute shortfall per saturated wheel; manage saturation state with
            hysteresis (``sat_margin`` to enter, ``sat_release_margin`` to leave).
-        4. Determine ceiling: ``min(n_i for saturated wheels)`` if any, else ``S``
-           (the target setpoint).
+        4. Determine ceiling:
+
+           - If any wheel is saturated: ``ceiling = min(n_i for saturated wheels)``
+             (cap-to-slowest).  Record the min as ``_learned_bottleneck``.
+           - No prior saturation (``_learned_bottleneck is None``): ``ceiling = S``
+             — spin-up path, full recovery_accel ramp.
+           - Post-saturation, settle window active: ``ceiling = g`` (hold steady).
+           - Post-saturation, settled: ``ceiling = min(g + probe_step, probe_target)``
+             where ``probe_target`` is capped by any wheel with normalised speed
+             significantly below ``g`` (raw-cap, bypasses sat_settle_s hysteresis
+             to prevent g from silently climbing past the physical limit).
+
         5. Slew-limit ``g`` toward ceiling: down by ``max_accel * dt``, up by
            ``recovery_accel * dt``; clamp to ``[min_scale, S]``.
         6. Emit targets to each controller.
@@ -307,6 +317,19 @@ class RatioDrive:
         on_error:          Callable invoked with an ``Exception`` on transient
                            per-iteration errors.  If ``None``, errors are
                            suppressed silently.
+        probe_step:        Maximum upward step applied to ``g`` per tick when no
+                           wheel is saturated.  Acts as a slew-rate limit on
+                           recovery so that ``g`` probes upward gradually rather
+                           than jumping directly to ``S``.  This prevents the
+                           limit-cycle where ``g`` bounces between the bottleneck
+                           speed and ``S`` indefinitely.  Default 10 counts/s per
+                           tick (≈ 500 counts/s over 1 s at 50 Hz).
+        probe_settle_ticks: Number of governor ticks to hold ``g`` steady after a
+                           cap-down event (velocity saturation triggered) before
+                           the upward probe resumes.  This deadband window prevents
+                           the probe from immediately re-triggering saturation at
+                           the bottleneck equilibrium.  Default 5 ticks (≈ 100 ms
+                           at 50 Hz).
         current_limit_ma:  Per-motor current limit in milliamps.  When set,
                            the governor reads ``Motor.get_current_ma()`` each Nth
                            tick and treats any motor exceeding the limit as the
@@ -344,6 +367,8 @@ class RatioDrive:
         velocity_pid: tuple[float, float, float] | None = None,
         on_error: Callable[[Exception], None] | None = None,
         current_limit_ma: int | None = None,
+        probe_step: float = 10.0,
+        probe_settle_ticks: int = 5,
     ) -> None:
         self._hub = hub
         self._rate_hz = rate_hz
@@ -357,6 +382,23 @@ class RatioDrive:
         self._cpr = cpr
         self._velocity_pid = velocity_pid
         self._on_error = on_error
+        # Damped upward probe parameters (fix for 003-009 limit-cycle).
+        # probe_step: maximum upward step in g per tick when not saturated.
+        # probe_settle_ticks: ticks to hold g steady after a cap-down event.
+        self._probe_step: float = probe_step
+        self._probe_settle_ticks: int = probe_settle_ticks
+        # Countdown counter; decremented each tick when not saturated and settled.
+        # Set to probe_settle_ticks whenever velocity saturation fires.
+        self._probe_settle_counter: int = 0
+        # Learned bottleneck normalised speed (counts/s): the minimum n_i observed
+        # while velocity saturation was active.  Set to None initially (spin-up /
+        # no prior saturation) so that ceiling = S and g ramps normally.
+        # Once set, used to gate the probe path: raw_cap limits the ceiling to the
+        # observed physical speed, preventing silent climb above the bottleneck.
+        # Can only decrease (tighter bottleneck recorded on each saturation event).
+        # NOT actively cleared — the raw_cap mechanism drives gradual recovery when
+        # the bottleneck physically clears (n_i meets target → raw_cap = probe_target).
+        self._learned_bottleneck: float | None = None
 
         # Current-limit governor (opt-in via current_limit_ma).
         self._current_limit_ma: int | None = current_limit_ma
@@ -655,10 +697,80 @@ class RatioDrive:
             self._saturated = len(saturated_channels) > 0
 
             # -- Ceiling computation (velocity path) ---------------------
+            #
+            # The governor uses two complementary mechanisms to eliminate the
+            # steady-state limit-cycle:
+            #
+            # 1. Damped upward probe: when not saturated, ceiling = g + probe_step
+            #    per tick (not a jump to S).  After a cap-down event, a settle
+            #    counter holds g steady for probe_settle_ticks ticks.
+            #
+            # 2. Learned bottleneck: when velocity saturation fires, the observed
+            #    bottleneck speed (min n_i of saturated channels) is recorded in
+            #    _learned_bottleneck.  In the probe path, a raw-cap limits the
+            #    ceiling to any lagging wheel's observed speed, preventing g from
+            #    silently climbing past the physical maximum even when the shortfall
+            #    is below sat_margin.  When the bottleneck clears (all wheels keeping
+            #    up), raw_cap = probe_target and g recovers at probe_step/tick.
+            #
             if saturated_channels:
+                # Cap-to-slowest via hysteresis state (official saturation).
                 ceiling = min(new_normalized[ch] for ch in saturated_channels)
+                # Record the observed bottleneck normalised speed.  Take the
+                # minimum so that tightening bottlenecks are tracked downward;
+                # loosening is detected via the recovery path below.
+                if self._learned_bottleneck is None or ceiling < self._learned_bottleneck:
+                    self._learned_bottleneck = ceiling
+                # Reset the settle counter whenever saturation fires so that g
+                # is held steady at the bottleneck equilibrium after the cap.
+                self._probe_settle_counter = self._probe_settle_ticks
             else:
-                ceiling = S
+                # No hysteresis-flagged saturation.
+                if self._learned_bottleneck is None:
+                    # No prior saturation event (initial spin-up): full ceiling = S,
+                    # original behaviour — g ramps at recovery_accel.
+                    ceiling = S
+                elif self._probe_settle_counter > 0:
+                    # Post-saturation settle window: hold g steady.  This
+                    # deadband gives the governor time to read a stable velocity
+                    # measurement at the bottleneck equilibrium before probing.
+                    self._probe_settle_counter -= 1
+                    ceiling = g
+                else:
+                    # Post-settle probe: g is near the bottleneck equilibrium.
+                    # Allow g to climb by at most probe_step per tick toward S,
+                    # but immediately cap at any wheel's observed normalised speed
+                    # that is BELOW the probe target.
+                    #
+                    # "Immediately cap" bypasses the sat_settle_s hysteresis window
+                    # that would otherwise allow g to silently climb sat_margin above
+                    # the physical limit before saturation fires.  Because this path
+                    # is only active after a confirmed saturation event
+                    # (_learned_bottleneck is not None), spin-up lag (which never
+                    # enters this path) is unaffected.
+                    probe_target = min(g + self._probe_step, S)
+                    # Find the lowest measured normalised speed that is significantly
+                    # below the current g.  "Significantly" means the shortfall
+                    # exceeds sat_release_margin — the same threshold used to release
+                    # the official saturation state.  This avoids false caps from
+                    # normal measurement noise (which is typically < sat_release_margin
+                    # of g).  A wheel that is genuinely unable to keep up (physically
+                    # limited) will show n_i < g*(1-sat_release_margin) persistently.
+                    noise_floor = g * self._sat_release_margin
+                    raw_cap: float = probe_target
+                    for n_i in new_normalized.values():
+                        if n_i < g - noise_floor:
+                            raw_cap = min(raw_cap, n_i)
+                    ceiling = raw_cap
+                    # _learned_bottleneck is NOT cleared here.  The raw_cap mechanism
+                    # provides correct behaviour in both steady-state and recovery:
+                    # - Steady-state bottleneck (n_i < g): raw_cap holds g near the
+                    #   physical limit (ceiling ≈ n_i), achieving the fixed point.
+                    # - After bottleneck clears (n_i ≥ g): raw_cap = probe_target =
+                    #   g + probe_step, so g climbs at probe_step per tick toward S
+                    #   — gradual recovery taking ~1 s at default probe_step=10, 50 Hz.
+                    # The learned value can only decrease (updated when saturation
+                    # fires with a tighter ceiling); it is never raised.
 
             # -- Current-aware ceiling (opt-in) --------------------------
             # When current_limit_ma is set, read per-motor current every
