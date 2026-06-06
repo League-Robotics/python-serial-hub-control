@@ -288,8 +288,10 @@ class RatioDrive:
            at-zero regression).
 
         3. ``g_target = min(S, sticky_max_speed_cap, live_current_cap)``; slew
-           ``g`` down fast (``max_accel``), up damped (``recovery_accel_up``);
-           clamp to ``[min_scale, S]``.
+           ``g`` down fast (``max_accel``), up fast (``recovery_accel_up``,
+           default ``max_accel``); clamp to ``[min_scale, S]``.  Fast upward
+           slew means spin-up reaches setpoint in ~1 s; the live current cap
+           re-engages if current spikes during recovery.
 
     Threading model:
         A daemon thread (``rhsp-ratiodrive``) calls ``step()`` at ``rate_hz``.
@@ -302,7 +304,7 @@ class RatioDrive:
                            Channels with weight 0 are excluded from the governor.
         rate_hz:           Daemon-thread tick rate (Hz).  Default 50.
         max_accel:         Maximum downward slew rate (counts/s²).  Default 6000.
-        recovery_accel:    Upward slew rate alias for ``recovery_accel_up``
+        recovery_accel:    Deprecated alias for ``recovery_accel_up``
                            (kept for API compatibility).  If both are supplied,
                            ``recovery_accel_up`` wins.
         min_scale:         Floor for ``g`` (clamp after slew).  Default 0.0.
@@ -340,11 +342,15 @@ class RatioDrive:
                            must be present before the plateau test fires.  This
                            prevents latching when the wheel is already tracking
                            the target.  Default 0.15.
-        recovery_accel_up: Upward slew rate for ``g`` (counts/s²).  Chosen so
-                           load recovery from a de-rated ``g`` back to ``S``
-                           takes approximately 1 second.  Default 500 counts/s²
-                           (500 counts/s per second → ~2 s for a 1000 count/s
-                           climb at 50 Hz).
+        recovery_accel_up: Upward slew rate for ``g`` (counts/s²) used for both
+                           normal spin-up and post-cap recovery.  Defaults to
+                           ``max_accel`` (6000 cnt/s²) so ``g`` reaches a 1000
+                           cnt/s setpoint in ~1 s at 50 Hz (8 ticks).  If the
+                           motor draws over-limit current during a fast recovery
+                           the live current cap re-engages automatically, making
+                           a separate "damped recovery" rate unnecessary.  Set
+                           an explicit value (e.g. 500) only if you observe
+                           visible oscillation in your rig.
         latch_persist_ticks: Number of consecutive ticks the plateau condition
                            must hold before the speed latch fires.  This prevents
                            a single noisy velocity sample (e.g. a transient 0
@@ -411,13 +417,17 @@ class RatioDrive:
         # A would-be cap below min_latch_frac * g is a spin-up transient, not a
         # genuine physical ceiling.  Prevents g from being pinned near 0.
         self._min_latch_frac: float = min_latch_frac
-        # Upward recovery slew rate: recovery_accel_up > recovery_accel > max_accel fallback.
+        # Upward slew rate: recovery_accel_up > recovery_accel > max_accel fallback.
+        # Defaulting to max_accel means spin-up and post-cap recovery are both fast —
+        # g ramps to setpoint in ~1 s (6000 cnt/s * 0.02 s = 120 counts/tick at 50 Hz).
+        # The live current cap re-engages automatically if fast recovery would over-current,
+        # so no separate "damped recovery" rate is needed.
         if recovery_accel_up is not None:
             self._recovery_accel_up: float = recovery_accel_up
         elif recovery_accel is not None:
             self._recovery_accel_up = recovery_accel
         else:
-            self._recovery_accel_up = 500.0  # ~2 s to climb 1000 counts at 50 Hz
+            self._recovery_accel_up = max_accel  # match downward slew; fast spin-up and recovery
         # Keep _recovery_accel as an alias so existing tests that read it still work.
         self._recovery_accel: float = self._recovery_accel_up
 
@@ -712,7 +722,7 @@ class RatioDrive:
             held until setpoint/weight changes or spontaneous velocity recovery.
           Cap 2 — live current closed-loop: proportional pull-down when any motor
             current exceeds current_limit_ma; no cap when all are under limit.
-          g_target = min(S, sticky_cap, current_cap); slew down fast, up damped.
+          g_target = min(S, sticky_cap, current_cap); slew down fast, up fast (default).
 
         This method may be called directly from tests without running the
         daemon thread.  All state mutations are protected by the internal

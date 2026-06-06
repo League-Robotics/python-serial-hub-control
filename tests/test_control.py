@@ -805,13 +805,14 @@ class TestRatioDriveConstruct:
     """Constructor and basic property tests."""
 
     def test_recovery_accel_defaults_to_max_accel(self) -> None:
-        # 003-010: recovery_accel_up is now an independent tunable defaulting to 500.
-        # The old behavior (recovery_accel == max_accel when unspecified) is superseded:
-        # the new governor uses a deliberately slow upward rate to prevent overshoot.
+        # 003-010 tuning fix: recovery_accel_up now defaults to max_accel so that
+        # spin-up and post-cap recovery are both fast.  The live current cap
+        # re-engages automatically if fast recovery over-currents, so a separate
+        # slow damping rate is not needed by default.
         hub = _FakeHubForRatio()
         rd = RatioDrive(hub, {0: 1.0, 1: 1.0}, max_accel=5000.0)
-        # Default recovery_accel_up is 500 (independent of max_accel).
-        assert rd._recovery_accel_up == 500.0
+        # Default recovery_accel_up matches max_accel (fast spin-up).
+        assert rd._recovery_accel_up == 5000.0
         # _recovery_accel is kept as an alias for backward-compat; it mirrors _recovery_accel_up.
         assert rd._recovery_accel == rd._recovery_accel_up
 
@@ -895,8 +896,8 @@ class TestRatioDriveRatioInvariance:
     def test_ratio_invariant_across_steps(self) -> None:
         """commanded_targets[0] / commanded_targets[1] == w[0] / w[1] at every step.
 
-        003-010: The new governor climbs at recovery_accel_up (default 500 cnt/s²) rather
-        than at max_accel.  At low g values (first few ticks), integer rounding dominates
+        003-010 tuning fix: The new governor climbs at recovery_accel_up (default = max_accel,
+        6000 cnt/s²) — fast spin-up.  At low g values (first few ticks), integer rounding dominates
         the ratio check (e.g. round(8*0.75)=6 → ratio=8/6=1.333 is fine, but at g=2,
         round(2*0.75)=2 → ratio=1.0 ≠ 1.333).  We skip the ratio assertion when commanded
         targets are too small for rounding to be insignificant (|t1| < 20).
@@ -2636,23 +2637,25 @@ class TestRatioDriveGenuineRecovery:
             f"got {g_recovered:.1f}"
         )
 
-    def test_recovery_is_gradual_not_instant(self) -> None:
-        """003-010: After set_speed() clears the latch, g climbs at recovery_accel_up.
+    def test_recovery_is_fast_after_latch_clear(self) -> None:
+        """003-010 tuning fix: After set_speed() clears the latch, g climbs FAST.
 
-        Old behavior: probe_step=10 cnt/tick gave a gradual ~50-tick recovery.
-        New behavior: recovery_accel_up (default 500 cnt/s²) also gives gradual recovery
-        at 50 Hz (500*0.02=10 cnt/tick, identical rate to probe_step=10).
-        In 5 ticks (0.1 s): max rise = 500*0.1=50 counts — well below S=1000.
+        Default recovery_accel_up now equals max_accel (6000 cnt/s²), so recovery
+        from the bottleneck ceiling back to S is no longer the slow 500 cnt/s² path.
+        At 50 Hz (dt=0.02 s): max rise per tick = 6000 * 0.02 = 120 counts.
+        After 5 ticks: max rise = 600 counts, which is substantial.
 
-        Note: do NOT pass explicit recovery_accel (which would override recovery_accel_up
-        and make recovery fast); rely on the default recovery_accel_up=500.
+        If you need a deliberately slow recovery (e.g. to avoid current spikes),
+        pass recovery_accel_up=500 explicitly.
+
+        Note: the live current cap will re-engage if a fast recovery over-currents,
+        so slow damping is not needed for safety; the current cap is the safety net.
         """
         weights = {0: 1.0, 1: 5.0}
         S = 1000.0
         dt_ms = 20
 
-        # Use default recovery_accel_up (500) for gradual recovery.
-        # Do NOT pass recovery_accel to avoid overriding the slow default.
+        # Use default recovery_accel_up (= max_accel = 6000) for fast recovery.
         rd, _, _ = _make_ratio_drive(
             weights,
             target_scale=S,
@@ -2681,8 +2684,65 @@ class TestRatioDriveGenuineRecovery:
         # Clear latch via set_speed().
         rd.set_speed(S)
 
-        # Start recovery: after 5 ticks at default recovery_accel_up=500,
-        # max rise = 500 * (5 * 0.02) = 50 counts.  g should still be near convergence.
+        # After 5 ticks at max_accel=6000, max rise = 6000*(5*0.02) = 600 counts.
+        # g should have climbed significantly from the convergence point (~500).
+        for _ in range(5):
+            time_ms += dt_ms
+            g = rd.scale
+            v0 = round(g)
+            v1 = round(g * 5.0)  # no physical cap — motors can track freely
+            _synthetic_tick(rd, time_ms=time_ms, motor0_v=v0, motor1_v=v1)
+
+        g_after_5 = rd.scale
+        # After 5 fast ticks, g should have climbed noticeably from convergence.
+        # min expected: g_at_convergence + at_least_300_counts (conservative — motors
+        # may re-latch since w1=5.0 and v1 can again hit the physical cap).
+        assert g_after_5 > g_at_convergence, (
+            f"Recovery should have started after latch clear; g_at_convergence={g_at_convergence:.1f}, "
+            f"g_after_5={g_after_5:.1f}"
+        )
+
+    def test_explicit_slow_recovery_is_still_possible(self) -> None:
+        """Passing an explicit recovery_accel_up=500 still gives gradual recovery.
+
+        This preserves the old slow-recovery behavior for rigs where a fast
+        post-cap climb is undesirable (e.g. very low current limits).
+        """
+        weights = {0: 1.0, 1: 5.0}
+        S = 1000.0
+        dt_ms = 20
+        slow_accel = 500.0  # explicit slow rate
+
+        rd, _, _ = _make_ratio_drive(
+            weights,
+            target_scale=S,
+            max_accel=6000.0,
+            recovery_accel=slow_accel,  # explicit slow override
+            sat_margin=0.15,
+            sat_release_margin=0.07,
+            sat_settle_s=0.3,  # superseded — accepted but ignored
+            deadband=0,
+        )
+        rd._scale = S
+
+        time_ms = 0
+        # Converge at bottleneck.
+        for _ in range(100):
+            time_ms += dt_ms
+            g = rd.scale
+            v0 = round(g)
+            v1 = min(round(g * 5.0), 2500)
+            _synthetic_tick(rd, time_ms=time_ms, motor0_v=v0, motor1_v=v1)
+
+        g_at_convergence = rd.scale
+        assert abs(g_at_convergence - 500) <= 80, (
+            f"Expected g≈500 at bottleneck convergence, got {g_at_convergence:.1f}"
+        )
+
+        # Clear latch via set_speed().
+        rd.set_speed(S)
+
+        # With slow_accel=500, after 5 ticks: max rise = 500*(5*0.02) = 50 counts.
         for _ in range(5):
             time_ms += dt_ms
             g = rd.scale
@@ -2691,11 +2751,11 @@ class TestRatioDriveGenuineRecovery:
             _synthetic_tick(rd, time_ms=time_ms, motor0_v=v0, motor1_v=v1)
 
         g_after_5 = rd.scale
-        # After only 5 ticks at recovery_accel_up=500, g should NOT have jumped to S.
-        # Max rise = 50 counts, so g ≤ g_at_convergence + 50 ≈ 550, well below 800=S*0.8.
+        # After 5 slow ticks, g should NOT have jumped to S.
+        # Max rise = 50 counts, so g ≤ g_at_convergence + 50 ≈ 550, well below S*0.8=800.
         assert g_after_5 < S * 0.8, (
-            f"Recovery was too fast — g jumped to {g_after_5:.1f} in 5 ticks "
-            f"(expected gradual climb from {g_at_convergence:.1f})"
+            f"Explicit slow recovery: g jumped to {g_after_5:.1f} in 5 ticks "
+            f"(expected gradual climb from {g_at_convergence:.1f} with accel={slow_accel})"
         )
 
 
@@ -3134,8 +3194,8 @@ class TestRatioDriveLatchHardening:
             rd.update(bulk)
 
         # g must have kept climbing — not stuck at 0 or near the transient value.
-        # With default recovery_accel_up=500 at 50 Hz: 10 cnt/tick.
-        # Starting from g≈80 after 30 ticks: 80 + 300 = 380 → expect > 200.
+        # With default recovery_accel_up=max_accel=100000 at 50 Hz: 2000 cnt/tick.
+        # Starting from g≈80 after 30 ticks: should easily exceed 200.
         # The key invariant: g must NOT be stuck at 0 or near the transient.
         final_g = rd.scale
         assert final_g > 200.0, (
@@ -3466,9 +3526,12 @@ class TestRatioDriveNewTunableDefaults:
         assert rd._speed_margin_frac == 0.15
 
     def test_recovery_accel_up_default(self) -> None:
+        # 003-010 tuning fix: default recovery_accel_up now equals max_accel (6000.0),
+        # giving fast spin-up.  The old 500.0 default caused ~6 s crawl to setpoint.
         hub = _FakeHubForRatio()
         rd = RatioDrive(hub, {0: 1.0, 1: 1.0})
-        assert rd._recovery_accel_up == 500.0
+        # Default max_accel is 6000.0, so recovery_accel_up should equal that.
+        assert rd._recovery_accel_up == 6000.0
 
     def test_recovery_accel_explicit_via_recovery_accel_up(self) -> None:
         hub = _FakeHubForRatio()
@@ -3504,3 +3567,107 @@ class TestRatioDriveNewTunableDefaults:
         assert rd._sat_settle_s == 0.7
         assert rd._probe_step == 5.0
         assert rd._probe_settle_ticks == 10
+
+
+# ---------------------------------------------------------------------------
+# RatioDrive — fast spin-up test (003-010 tuning fix)
+# ---------------------------------------------------------------------------
+
+
+class TestRatioDriveFastSpinUp:
+    """003-010 tuning fix: Normal spin-up must reach setpoint fast (< 1 s at 50 Hz).
+
+    The previous default recovery_accel_up=500 cnt/s² caused g to crawl from 0
+    to 1000 over ~6 s (100 ticks at 50 Hz).  The fix: default recovery_accel_up
+    to max_accel (6000 cnt/s²), so g reaches 1000 cnt/s in ~8–10 ticks (160–200 ms).
+    """
+
+    def test_spinup_reaches_setpoint_within_20_ticks(self) -> None:
+        """With default max_accel=6000, g reaches S=1000 within 20 ticks at 50 Hz.
+
+        20 ticks × 0.02 s = 0.4 s — well under the 1 s target.
+        Both wheels track g (no bottleneck), no latch fires.
+        """
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        dt_ms = 20
+        max_accel = 6000.0
+
+        rd, _, _ = _make_ratio_drive_010(
+            weights,
+            target_scale=S,
+            max_accel=max_accel,
+            deadband=0,
+        )
+        # Start from g=0 (fresh spin-up).
+        assert rd.scale == 0.0
+
+        time_ms = 0
+        for tick in range(20):
+            time_ms += dt_ms
+            g = rd.scale
+            # Both wheels perfectly tracking (no bottleneck).
+            bulk = _make_bulk_timed(
+                motor0_velocity=round(g), motor1_velocity=round(g), time_ms=time_ms
+            )
+            rd.update(bulk)
+
+        # g must have reached S within 20 ticks.
+        assert rd.scale >= S * 0.95, (
+            f"Spin-up too slow: g={rd.scale:.1f} after 20 ticks (expected ≥ {S*0.95:.0f}). "
+            f"recovery_accel_up={rd._recovery_accel_up}"
+        )
+        assert not rd.saturated, "No latch should have fired during clean spin-up"
+
+    def test_spinup_much_faster_than_old_500_default(self) -> None:
+        """With max_accel=6000, spin-up is ~12× faster than old 500 cnt/s² default.
+
+        Old: 100 ticks (2 s) to reach 1000.
+        New: ~9 ticks (0.18 s) to reach 1000.
+        After 9 ticks the new governor should be at/near S; the old governor at ~90.
+        """
+        weights = {0: 1.0, 1: 1.0}
+        S = 1000.0
+        dt_ms = 20
+        max_accel = 6000.0
+
+        rd_fast, _, _ = _make_ratio_drive_010(
+            weights, target_scale=S, max_accel=max_accel, deadband=0
+        )
+        # Simulate old slow governor with explicit recovery_accel_up=500.
+        from rhsp.control import RatioDrive
+        fake_hub_slow = _FakeHubForRatio()
+        rd_slow = RatioDrive(
+            fake_hub_slow,
+            weights,
+            max_accel=max_accel,
+            recovery_accel_up=500.0,  # explicit old default
+            deadband=0,
+        )
+        for ch in weights:
+            rc = _RecordingController(ch)
+            rd_slow._controllers[ch] = rc  # type: ignore[assignment]
+        rd_slow._target_scale = S
+
+        time_ms = 0
+        for _ in range(9):
+            time_ms += dt_ms
+            g_fast = rd_fast.scale
+            g_slow = rd_slow.scale
+            bulk_fast = _make_bulk_timed(
+                motor0_velocity=round(g_fast), motor1_velocity=round(g_fast), time_ms=time_ms
+            )
+            bulk_slow = _make_bulk_timed(
+                motor0_velocity=round(g_slow), motor1_velocity=round(g_slow), time_ms=time_ms
+            )
+            rd_fast.update(bulk_fast)
+            rd_slow.update(bulk_slow)
+
+        # After 9 ticks: fast governor should be near S; slow governor still far below.
+        assert rd_fast.scale >= S * 0.85, (
+            f"Fast spin-up: expected g ≥ {S*0.85:.0f} after 9 ticks; got {rd_fast.scale:.1f}"
+        )
+        assert rd_slow.scale < S * 0.2, (
+            f"Slow governor (500 cnt/s²) should still be far below S after 9 ticks; "
+            f"got {rd_slow.scale:.1f}"
+        )

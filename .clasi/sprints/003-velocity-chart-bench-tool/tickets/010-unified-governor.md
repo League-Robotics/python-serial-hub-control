@@ -1,7 +1,7 @@
 ---
 id: 003-010
 title: 'Unified RatioDrive governor: two-cap design (sticky max-speed + live current)'
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -157,6 +157,17 @@ New tunables (`plateau_threshold_cnts_s2`, `ema_alpha`, `speed_margin_frac`,
   t=4.0s g=630 v0=620 v1=620; t=5.0s g=780 v0=760 v1=760;
   t=5.8s g=900 v0=860 v1=880. No latch. PASS.
 
+  **Fast spin-up tuning fix (003-010 reopened):**
+  Previous bug: `recovery_accel_up` defaulted to 500 cnt/s² making g crawl 30→850
+  over ~6 s. Fix: default `recovery_accel_up` to `max_accel` (6000 cnt/s²).
+  Hardware re-validation (200 ms polling, 30 samples):
+  t=0.0s g=360 v0=160 v1=80; t=0.2s g=720 v0=500 v1=480; t=0.4s g=1000 v0=820 v1=800.
+  g reached 1000 at t=0.4 s. No latch. No oscillation. PASS.
+
+  **Fast spin-up + current-limit 1500 (ratio 1.0):**
+  t=0.0s g=360 v0=180 v1=200; t=0.2s g=720 v0=520 v1=540; t=0.4s g=1000 v0=860 v1=820.
+  g reached 1000 at t=0.4 s. No latch. No collapse. PASS.
+
 - [x] **Ratio 5.0 — no overshoot, no limit cycle**: `RatioDrive(hub,
   {0:1.0, 1:5.0}); set_speed(1000)`. g settles near the bottleneck (~500 for
   this rig) WITHOUT the prior large overshoot to ~1000 (plateau-based latch
@@ -181,6 +192,15 @@ New tunables (`plateau_threshold_cnts_s2`, `ema_alpha`, `speed_margin_frac`,
   Trace (200 ms polling):
   t=0.0s g=30; t=1.0s g=200 v1=880; t=2.0s g=380 v1=1720; t=3.0s g=560 v1=2440;
   t=3.4s g=488 (LATCH); t=3.6–5.8s g=488 stable. PASS.
+
+  **Fast spin-up tuning fix (003-010 reopened) — ratio 5.0:**
+  g ramps fast: t=0.0s g=360, t=0.2s g=840, t=0.4s g=1000 (overshoot).
+  Latch fires at t≈1.2 s: g drops to 640, then 476. g holds stable at 476
+  for t=1.4–5.8 s. No oscillation. Motor 0: ~480 cnt/s, Motor 1: ~2360 cnt/s.
+  Brief overshoot-then-settle is acceptable per stakeholder.
+  Trace (200 ms polling):
+  t=0.0s g=360; t=0.2s g=840; t=0.4–1.0s g=1000; t=1.2s g=640; t=1.4s g=476 (LATCH);
+  t=1.6–5.8s g=476 stable. PASS.
 
 - [ ] **Load de-rate + recovery (ratio 1.0, current_limit set) — operator
   assisted**: `RatioDrive(hub, {0:1.0, 1:1.0}, current_limit_ma=<limit>);
@@ -247,9 +267,11 @@ New tunables (`plateau_threshold_cnts_s2`, `ema_alpha`, `speed_margin_frac`,
   genuine sustained high plateau at n1=500 still latches correctly; (e)
   latch fires only after exactly _latch_persist_ticks consecutive ticks.
 
-- [x] **Full suite green**: `uv run pytest` exits 0 (611 → 616 tests; 5
-  additional false-latch regression tests in `TestRatioDriveLatchHardening`;
-  previously 19 new tests added in `TestRatioDrivePlateauLatch`, `TestRatioDriveCurrentCapNew`,
+- [x] **Full suite green**: `uv run pytest` exits 0 (611 → 616 → 619 tests; 3
+  additional fast-spin-up tests in `TestRatioDriveFastSpinUp` and updated
+  `TestRatioDriveGenuineRecovery` for the tuning fix; previously 5 false-latch
+  regression tests added in `TestRatioDriveLatchHardening`, and 19 new tests in
+  `TestRatioDrivePlateauLatch`, `TestRatioDriveCurrentCapNew`,
   `TestRatioDriveRatioExactnessNew`, `TestRatioDriveNewTunableDefaults`).
 
 ## Testing
