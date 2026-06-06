@@ -414,7 +414,7 @@ wheels = [
 
 [[package]]
 name = "rhsp"
-version = "0.20260605.29"
+version = "0.20260605.32"
 source = { editable = "." }
 dependencies = [
     { name = "pyserial" },

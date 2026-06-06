@@ -1,7 +1,7 @@
 ---
 id: 003-003
 title: Validate bench tool (hardware-free gate + hardware checklist)
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -34,22 +34,19 @@ new issue and fix it in a follow-on ticket or a direct patch.
 - [x] Confirm `examples/velocity_chart.py` does not appear in pytest collection
       output (`uv run pytest --collect-only | grep velocity_chart` returns empty). → empty
 
-**Hardware (manual — requires hub + 12V battery)**:
-- [ ] `uv run --extra bench python examples/velocity_chart.py --speed 1000 --ratio 1.0`
-      opens a matplotlib window with three panels.
-- [ ] SPACE key: both motors spin; strip charts fill with live traces; both
-      traces converge to the dashed setpoint line within ~5 s.
-- [ ] Phase plot: operating point dot tracks along the y=x (ratio=1.0)
-      reference line.
-- [ ] Hand-load motor A: strip chart for A droops below setpoint; phase dot
-      slides down along the ratio line (not diagonally off it); recovers on
-      release.
-- [ ] Second SPACE: motors stop cleanly; title updates to STOPPED state;
-      streaming pauses.
-- [ ] Q key: window closes, motors fail-safed, process exits with code 0.
-- [ ] Test with `--ratio 0.5`: phase plot reference line has slope 0.5; motor B
-      runs at half the commanded scale of motor A; ratio-preservation under load
-      is visible in the phase plot.
+**Hardware (manual — requires hub + 12V battery)** — PASSED 2026-06-06, stakeholder confirmed ("that is awesome"):
+- [x] velocity_chart opens with three panels.
+- [x] SPACE: both motors spin; strip charts converge to setpoint (fast, after the
+      003-004 transport-latency and 003-005 governor spin-up fixes).
+- [x] Phase plot: operating-point dot tracks the ratio reference line.
+- [x] Load test: validated via current-aware de-rating (003-007) with
+      `--current-limit 1500` — gradually loading a motor de-rates the pack and the
+      phase dot slides down the ratio line WITHOUT tripping the supply. (Note: the
+      original "velocity droops under load" premise does not hold on this stiff-PID
+      hub — the wheel holds speed and pulls current, so de-rating is current-based,
+      not velocity-based. See 003-007 and the project-knowledge note.)
+- [x] Second SPACE stops cleanly; Q exits cleanly.
+- [x] `--ratio 0.5`: slope-0.5 reference line; ratio preserved.
 
 ## Implementation Plan
 

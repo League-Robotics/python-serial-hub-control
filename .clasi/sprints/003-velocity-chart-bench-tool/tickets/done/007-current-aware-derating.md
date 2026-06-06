@@ -64,14 +64,12 @@ each motor's current approach the limit in real time.
       title or as a readout annotation). A full extra subplot is optional; a
       title-line readout is sufficient.
 - [x] `uv run pytest` exits 0 with 562+ tests passing (no regressions).
-- [ ] **Manual hardware gate (operator-in-the-loop, supply ~5 A)**:
-      With `--current-limit` set safely below the supply trip threshold, run
-      `velocity_chart.py`, press SPACE to start, then hand-load one motor.
-      Expected: the pack de-rates, the phase-plot dot slides DOWN ALONG the
-      ratio reference line (not off it), current holds near the limit, and
-      the supply does NOT trip / the hub does NOT brown out. Release the load:
-      the pack recovers toward setpoint. This step is run by the team-lead
-      with the stakeholder and is the final acceptance gate.
+- [x] **Manual hardware gate (operator-in-the-loop, supply ~5 A)**: PASSED
+      2026-06-06. Ran `velocity_chart.py --speed 1000 --ratio 1.0
+      --current-limit 1500`; SPACE started the rig, motors converged, and
+      gradually hand-loading a motor de-rated the pack with the phase dot
+      sliding down the ratio line — **the supply did not trip**. Stakeholder
+      confirmed ("that is awesome").
 
 ## Implementation Plan
 

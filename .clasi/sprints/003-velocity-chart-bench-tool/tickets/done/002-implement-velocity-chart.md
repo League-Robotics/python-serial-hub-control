@@ -30,20 +30,27 @@ No library source files are modified. This ticket adds one new file to `examples
 - [x] File `examples/velocity_chart.py` exists, has no `test_` prefix, and is
       not collected by `uv run pytest`.
 - [x] AST parse succeeds: `uv run python -c "import ast, pathlib; ast.parse(pathlib.Path('examples/velocity_chart.py').read_text())"` exits 0.
-- [ ] Running `uv run --extra bench python examples/velocity_chart.py` (no hub)
-      opens a matplotlib window with three panels and title "REV Hub motor
-      velocity  [SPACE = connect]".
-- [ ] Pressing Q with the window focused closes the window cleanly (exit code 0).
+- [x] Running `uv run --extra bench python examples/velocity_chart.py` (no hub)
+      prints an error and exits 2 — SUPERSEDED by fail-fast decision (no hub +
+      no --port → print error + exit 2; stakeholder approved via ticket 003-003).
+      The "always-open matplotlib window" behaviour described at planning time
+      was never implemented.
+- [x] Pressing Q with the window focused closes the window cleanly (exit code 0)
+      — VALIDATED under 003-003 hardware gate (stakeholder confirmed 2026-06-06).
 - [x] CLI args `--port`, `--channels`, `--ratio`, `--speed`, `--window`,
       `--vmax`, `--rate` are accepted (`--help` lists them).
 - [x] `uv run pytest` stays green (no regressions).
 
 Hardware acceptance (requires `/dev/cu.usbserial-DQ3M375O` + 12V battery):
-- [ ] SPACE starts motors; strip charts fill with live velocity traces converging
-      to the dashed setpoint within ~5 s at `--speed 1000`.
-- [ ] Phase dot tracks along the slope-ratio reference line.
-- [ ] Second SPACE stops motors cleanly; title reverts to STOPPED state.
-- [ ] Q exits from any state; window closes, motors fail-safed.
+- [x] SPACE starts motors; strip charts fill with live velocity traces converging
+      to the dashed setpoint within ~5 s at `--speed 1000` — VALIDATED under
+      003-003 hardware gate (stakeholder confirmed 2026-06-06).
+- [x] Phase dot tracks along the slope-ratio reference line — VALIDATED under
+      003-003 hardware gate (stakeholder confirmed 2026-06-06).
+- [x] Second SPACE stops motors cleanly; title reverts to STOPPED state —
+      VALIDATED under 003-003 hardware gate (stakeholder confirmed 2026-06-06).
+- [x] Q exits from any state; window closes, motors fail-safed — VALIDATED under
+      003-003 hardware gate (stakeholder confirmed 2026-06-06).
 
 ## Implementation Plan
 
