@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Hub-managed LED + two-layer motor velocity control
-status: planning-docs
+status: done
 branch: sprint/002-hub-managed-led-two-layer-motor-velocity-control
 use-cases:
 - SUC-001
