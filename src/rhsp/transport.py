@@ -109,8 +109,23 @@ class SerialTransport:
         self._serial.write(data)
 
     def read(self, n: int) -> bytes:
-        """Read up to *n* bytes; returns fewer on timeout."""
-        return self._serial.read(n)  # type: ignore[return-value]
+        """Read up to *n* bytes; returns fewer on timeout.
+
+        On macOS, ``inter_byte_timeout`` does **not** cause ``Serial.read(n)``
+        to return early when fewer than *n* bytes are waiting — it blocks for
+        the full ``timeout`` (≈1 s) regardless.  To avoid that, we read only
+        the bytes that are already in the OS buffer.  If none are waiting yet,
+        we fall back to a single blocking ``read(1)`` which wakes as soon as
+        the first byte arrives (bounded by the port ``timeout``).  The session
+        layer's ``_read_response`` loop re-calls ``read()`` until the full
+        frame arrives, so returning a short chunk is always safe.
+        """
+        waiting = self._serial.in_waiting
+        if waiting > 0:
+            return self._serial.read(min(n, waiting))  # type: ignore[return-value]
+        # No bytes buffered yet — block only for the first byte so we wake
+        # promptly rather than waiting the full timeout for n bytes.
+        return self._serial.read(1)  # type: ignore[return-value]
 
     def reset_input(self) -> None:
         """Flush the serial receive buffer."""
