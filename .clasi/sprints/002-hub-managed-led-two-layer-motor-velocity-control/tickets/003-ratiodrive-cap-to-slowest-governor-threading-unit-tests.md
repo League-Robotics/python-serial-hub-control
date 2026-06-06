@@ -1,11 +1,11 @@
 ---
 id: '003'
-title: 'RatioDrive cap-to-slowest governor, threading, unit tests'
-status: open
+title: RatioDrive cap-to-slowest governor, threading, unit tests
+status: done
 use-cases:
-  - SUC-005
+- SUC-005
 depends-on:
-  - '002'
+- '002'
 github-issue: ''
 issue: plan-two-layer-motor-velocity-control-on-hub-pid-host-side-ratio-coordinator.md
 completes_issue: false
@@ -32,110 +32,110 @@ and must be implemented faithfully — do not redesign.
 
 ### Constructor
 
-- [ ] `RatioDrive` constructor signature:
+- [x] `RatioDrive` constructor signature:
       `RatioDrive(hub, weights: Mapping[int, float], *, rate_hz=50.0,
       max_accel=6000.0, recovery_accel=None, sat_margin=0.15,
       sat_release_margin=0.07, min_scale=0.0, deadband=20, cpr=None,
       velocity_pid=None, on_error=None)`.
-- [ ] `recovery_accel` defaults to `max_accel` when `None`.
-- [ ] `velocity_pid`, if provided, is pushed to each wheel's
+- [x] `recovery_accel` defaults to `max_accel` when `None`.
+- [x] `velocity_pid`, if provided, is pushed to each wheel's
       `motor.set_velocity_pid(p, i, d)` during `start()` / `attach()`.
 
 ### Setpoint API (thread-safe)
 
-- [ ] `set_speed(speed)`: sets `target_scale` (counts/s, or RPM if `cpr` set);
+- [x] `set_speed(speed)`: sets `target_scale` (counts/s, or RPM if `cpr` set);
       guarded by internal `RLock`.
-- [ ] `set_speed_rpm(rpm)`: only callable when `cpr` is set; raises `ValueError`
+- [x] `set_speed_rpm(rpm)`: only callable when `cpr` is set; raises `ValueError`
       otherwise; converts via `counts_per_s = rpm * cpr / 60`.
-- [ ] `set_weights(weights: Mapping[int, float])`: replaces ratio weights
+- [x] `set_weights(weights: Mapping[int, float])`: replaces ratio weights
       atomically (internal `RLock`).
-- [ ] `set_ratio(ratio: float, pair=(0, 1))`: convenience shorthand setting
+- [x] `set_ratio(ratio: float, pair=(0, 1))`: convenience shorthand setting
       `{pair[0]: 1.0, pair[1]: ratio}` (does not disturb other wheel weights).
-- [ ] `stop(brake=False)`: commands zero to all wheels via their
+- [x] `stop(brake=False)`: commands zero to all wheels via their
       `VelocityController.command(0)`; sets `target_scale = 0`.
 
 ### Lifecycle
 
-- [ ] `start()`: creates and starts the daemon thread `rhsp-ratiodrive`; calls
+- [x] `start()`: creates and starts the daemon thread `rhsp-ratiodrive`; calls
       `controller.attach()` on each wheel's `HubVelocityController`; is
       idempotent (second call is a no-op if already running).
-- [ ] `stop_loop()`: signals the daemon thread to exit and joins it; does NOT
+- [x] `stop_loop()`: signals the daemon thread to exit and joins it; does NOT
       detach controllers or zero wheels.
-- [ ] `close()`: commands zero to all wheels, calls `controller.detach(disable=True)`
+- [x] `close()`: commands zero to all wheels, calls `controller.detach(disable=True)`
       on each, restores prior motor modes, stops the loop thread; is idempotent.
-- [ ] `__enter__` calls `start()`; `__exit__` calls `close()`.
-- [ ] `update(bulk: BulkInputData)`: one synchronous governor step — can be
+- [x] `__enter__` calls `start()`; `__exit__` calls `close()`.
+- [x] `update(bulk: BulkInputData)`: one synchronous governor step — can be
       called directly from tests without running the thread.
-- [ ] `step()`: calls `hub.bulk_input()` then `update(bulk)`; for use in the
+- [x] `step()`: calls `hub.bulk_input()` then `update(bulk)`; for use in the
       daemon thread body.
 
 ### Read-only Properties
 
-- [ ] `scale: float` — current governor scale `g`.
-- [ ] `target_scale: float` — the commanded setpoint S.
-- [ ] `commanded_targets: dict[int, int]` — most recent `t_i` emitted per
+- [x] `scale: float` — current governor scale `g`.
+- [x] `target_scale: float` — the commanded setpoint S.
+- [x] `commanded_targets: dict[int, int]` — most recent `t_i` emitted per
       channel.
-- [ ] `measured: dict[int, int]` — most recent `v_i` read from bulk per channel.
-- [ ] `normalized_actual: dict[int, float]` — `n_i = sign(w_i) * v_i / |w_i|`
+- [x] `measured: dict[int, int]` — most recent `v_i` read from bulk per channel.
+- [x] `normalized_actual: dict[int, float]` — `n_i = sign(w_i) * v_i / |w_i|`
       per active channel.
-- [ ] `saturated: bool` — True if any wheel is currently in the saturated state.
-- [ ] `weights: dict[int, float]` — current weight mapping (copy).
+- [x] `saturated: bool` — True if any wheel is currently in the saturated state.
+- [x] `weights: dict[int, float]` — current weight mapping (copy).
 
 ### Governor Algorithm
 
-- [ ] Normalized actual speed per active channel: `n_i = sign(w_i) * v_i / |w_i|`
+- [x] Normalized actual speed per active channel: `n_i = sign(w_i) * v_i / |w_i|`
       (guard `|w_i| > 0`; apply `deadband`: treat `|v_i| < deadband` as `v_i = 0`).
-- [ ] Saturation with hysteresis judged against the *current* `g` (not `S`):
+- [x] Saturation with hysteresis judged against the *current* `g` (not `S`):
       `shortfall_i = (g - n_i) / max(g, epsilon)`. Enter `saturated` when
       `shortfall_i > sat_margin`; leave when `shortfall_i < sat_release_margin`.
-- [ ] Ceiling: if any wheel saturated, `g_ceiling = min(n_i for saturated i)`;
+- [x] Ceiling: if any wheel saturated, `g_ceiling = min(n_i for saturated i)`;
       else `g_ceiling = S` (climb toward setpoint).
-- [ ] Slew-limit `g` toward `g_ceiling`: move down by at most `max_accel * dt`,
+- [x] Slew-limit `g` toward `g_ceiling`: move down by at most `max_accel * dt`,
       up by at most `recovery_accel * dt`; clamp result to `[min_scale, S]`.
       Use real `dt` from `bulk.monotonic_time_ms` (difference from previous tick).
-- [ ] Emit `t_i = clamp_int16(round(g * w_i))` to each `VelocityController.command`.
-- [ ] Zero-weight wheels (`w_i == 0`): hold at 0, excluded from governor normalization
+- [x] Emit `t_i = clamp_int16(round(g * w_i))` to each `VelocityController.command`.
+- [x] Zero-weight wheels (`w_i == 0`): hold at 0, excluded from governor normalization
       and saturation checks (no division by zero).
 
 ### Threading
 
-- [ ] Daemon thread named `rhsp-ratiodrive`.
-- [ ] Loop body: `update(hub.bulk_input())` per tick at approximately `rate_hz`.
-- [ ] Per-iteration `try/except`: transient `Exception` calls `on_error(exc)` if
+- [x] Daemon thread named `rhsp-ratiodrive`.
+- [x] Loop body: `update(hub.bulk_input())` per tick at approximately `rate_hz`.
+- [x] Per-iteration `try/except`: transient `Exception` calls `on_error(exc)` if
       set and continues; does not kill the thread.
-- [ ] `RatioDrive` internal `RLock` guards: `target_scale`, `_weights`,
+- [x] `RatioDrive` internal `RLock` guards: `target_scale`, `_weights`,
       `_scale`, `_commanded_targets`, `_measured`, `_saturated`.
-- [ ] Coexists with the keep-alive heartbeat (`with hub:` keeps running); does not
+- [x] Coexists with the keep-alive heartbeat (`with hub:` keeps running); does not
       replace it.
 
 ### Unit Tests
 
-- [ ] **Ratio invariance**: feed a sweep of `update(bulk)` calls with varying
+- [x] **Ratio invariance**: feed a sweep of `update(bulk)` calls with varying
       measured velocities; assert `commanded_targets[0] / commanded_targets[1] ==
       weights[0] / weights[1]` (within float tolerance) at every step.
-- [ ] **Cap-to-slowest convergence**: wheel 1 stuck at 50% of its target for
+- [x] **Cap-to-slowest convergence**: wheel 1 stuck at 50% of its target for
       N steps; assert `scale` converges to `v1 / |w1|`; assert wheel 0 is never
       commanded above its proportional target (lagging wheel never boosted).
-- [ ] **Slew-limit down**: sudden bottleneck (one wheel drops to 0); assert
+- [x] **Slew-limit down**: sudden bottleneck (one wheel drops to 0); assert
       `scale` decreases by no more than `max_accel * dt` per step.
-- [ ] **Slew-limit up**: bottleneck clears; assert `scale` increases by no more
+- [x] **Slew-limit up**: bottleneck clears; assert `scale` increases by no more
       than `recovery_accel * dt` per step.
-- [ ] **Transient-accel robustness**: both wheels lag symmetrically during a
+- [x] **Transient-accel robustness**: both wheels lag symmetrically during a
       ramp (shortfall < `sat_margin`); assert `scale` does NOT collapse.
-- [ ] **Recovery + hysteresis**: after bottleneck clears, `saturated` flips to
+- [x] **Recovery + hysteresis**: after bottleneck clears, `saturated` flips to
       `False`; assert no chatter (no rapid on/off cycles) over subsequent steps.
-- [ ] **Zero-weight**: channel with `w_i = 0` is always commanded 0, never
+- [x] **Zero-weight**: channel with `w_i = 0` is always commanded 0, never
       participates in normalization; no `ZeroDivisionError`.
-- [ ] **Stall**: one wheel reads 0 persistently; assert `scale` converges to 0
+- [x] **Stall**: one wheel reads 0 persistently; assert `scale` converges to 0
       (or `min_scale`); no crash.
-- [ ] **Negative weight**: `{0: 1.0, 1: -0.5}` (one wheel reversed); assert
+- [x] **Negative weight**: `{0: 1.0, 1: -0.5}` (one wheel reversed); assert
       `commanded_targets[1]` is negative when `g > 0`; ratio sign is correct.
-- [ ] **int16 clamp**: target that would exceed 32767 is clamped; shows up as
+- [x] **int16 clamp**: target that would exceed 32767 is clamped; shows up as
       a real bottleneck in the next step (measured velocity stays at the clamp);
       assert ratio is preserved despite clamp.
-- [ ] **start/close idempotency**: calling `start()` twice does not create two
+- [x] **start/close idempotency**: calling `start()` twice does not create two
       threads; `close()` twice does not crash or double-detach.
-- [ ] **Zero-on-close**: after `close()`, `commanded_targets` are all 0.
+- [x] **Zero-on-close**: after `close()`, `commanded_targets` are all 0.
 
 ## Implementation Plan
 
