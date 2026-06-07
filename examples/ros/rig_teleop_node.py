@@ -35,6 +35,7 @@ import json
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Joy
 from std_msgs.msg import String
 
@@ -115,7 +116,10 @@ class RigTeleop(Node):
         self._last_axes: list[float] = []
         self._last_joy_t = 0.0
         self._last_servo_cmd: dict[int, float] = {}
-        self.create_subscription(Joy, self.joy_topic, self._on_joy, 10)
+        # best-effort sensor QoS: a best-effort subscriber matches BOTH
+        # best-effort and reliable Joy publishers (reliable-only subs miss
+        # best-effort publishers — a common "subscribed but nothing arrives").
+        self.create_subscription(Joy, self.joy_topic, self._on_joy, qos_profile_sensor_data)
         self.pub = self.create_publisher(String, self.sensors_topic, 10)
         self.create_timer(1.0 / self.control_rate, self._control_tick)
         self.create_timer(1.0 / self.sensor_rate, self._sensor_tick)
