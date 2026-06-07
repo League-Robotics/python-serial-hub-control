@@ -489,8 +489,14 @@ class TestI2CDeviceReadRegister:
         dev = I2CDevice(session, i2c_channel=0, dest=1, address=0x29)
         return transport, hub, session, dev
 
-    def test_write_multiple_bytes_then_read_issued(self) -> None:
-        """read_register issues I2CWriteMultipleBytes then I2CReadMultipleBytes."""
+    def test_write_single_byte_then_read_issued(self) -> None:
+        """read_register issues I2CWriteSingleByte (reg ptr) then I2CReadMultipleBytes.
+
+        Wire-protocol fix (fw 1.8.2): I2CWriteSingleByte is used for the
+        register-pointer phase; I2CWriteMultipleBytes with a 1-byte payload
+        does not reliably set the pointer on this firmware.  I2CReadMultipleBytes
+        is used when num_bytes >= 2.
+        """
         transport, hub, session, dev = self._make_i2c_device()
         # Set the read status to return data on the first poll.
         hub.set_rsp("I2CReadStatusQuery", i2cStatus=0, byteRead=2, payloadBytes=bytes([0xAB, 0xCD]))
@@ -500,13 +506,44 @@ class TestI2CDeviceReadRegister:
         finally:
             hub.stop()
 
-        # Verify write was issued (I2CWriteMultipleBytes = DEKA 0x26).
-        write_reqs = [r for r in hub.requests if r.packet_type == _DEKA_BASE + 0x26]
-        assert len(write_reqs) >= 1
+        # Verify register-pointer write was issued via I2CWriteSingleByte (DEKA 0x25).
+        write_reqs = [r for r in hub.requests if r.packet_type == _DEKA_BASE + 0x25]
+        assert len(write_reqs) >= 1, (
+            "read_register must use I2CWriteSingleByte (0x1025) for the register-pointer phase"
+        )
 
-        # Verify read was issued (I2CReadMultipleBytes = DEKA 0x28).
+        # Verify read was issued (I2CReadMultipleBytes = DEKA 0x28 for N>=2).
         read_reqs = [r for r in hub.requests if r.packet_type == _DEKA_BASE + 0x28]
         assert len(read_reqs) >= 1
+
+    def test_single_byte_read_uses_read_single_byte_command(self) -> None:
+        """read_register(reg, 1) uses I2CReadSingleByte (not ReadMultipleBytes).
+
+        On fw 1.8.2, I2CReadMultipleBytes with numBytes=1 returns stale data
+        from the hub's internal buffer.  Single-byte reads must use the
+        I2CReadSingleByte command (DEKA 0x27).
+        """
+        transport, hub, session, dev = self._make_i2c_device()
+        hub.set_rsp("I2CReadStatusQuery", i2cStatus=0, byteRead=1, payloadBytes=bytes([0xEE]))
+        hub.run_in_thread()
+        try:
+            data = dev.read_register(0xC0, 1)
+        finally:
+            hub.stop()
+
+        assert data == bytes([0xEE])
+
+        # I2CReadSingleByte = DEKA 0x27
+        single_read_reqs = [r for r in hub.requests if r.packet_type == _DEKA_BASE + 0x27]
+        assert len(single_read_reqs) >= 1, (
+            "read_register(reg, 1) must use I2CReadSingleByte (0x1027) on fw 1.8.2"
+        )
+
+        # ReadMultipleBytes must NOT be used for 1-byte reads.
+        multi_read_reqs = [r for r in hub.requests if r.packet_type == _DEKA_BASE + 0x28]
+        assert len(multi_read_reqs) == 0, (
+            "read_register(reg, 1) must NOT use I2CReadMultipleBytes"
+        )
 
     def test_poll_nack41_twice_then_data(self) -> None:
         """FakeHub returns NACK-41 twice then data — 3 total status query calls."""

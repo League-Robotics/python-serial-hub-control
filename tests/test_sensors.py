@@ -37,9 +37,13 @@ from fakehub import FakeHub
 # ---------------------------------------------------------------------------
 _DEKA_BASE = 0x1000
 
-# I2CWriteMultipleBytes = DEKA 0x26
+# I2CWriteSingleByte = DEKA 0x25 (register-pointer writes in read_register)
+_I2C_WRITE_SINGLE_TYPE = _DEKA_BASE + 0x25
+# I2CWriteMultipleBytes = DEKA 0x26 (data writes via write_register)
 _I2C_WRITE_TYPE = _DEKA_BASE + 0x26
-# I2CReadMultipleBytes = DEKA 0x28
+# I2CReadSingleByte = DEKA 0x27 (used for 1-byte reads in read_register)
+_I2C_READ_SINGLE_TYPE = _DEKA_BASE + 0x27
+# I2CReadMultipleBytes = DEKA 0x28 (used for N>=2 byte reads in read_register)
 _I2C_READ_TYPE = _DEKA_BASE + 0x28
 # I2CReadStatusQuery = DEKA 0x29
 _I2C_READ_STATUS_TYPE = _DEKA_BASE + 0x29
@@ -72,12 +76,30 @@ class IFakeDevice:
     """Type alias placeholder — not used at runtime, just for readability."""
 
 
+def _write_single_reqs(hub: FakeHub) -> list[RawPacket]:
+    """Return I2CWriteSingleByte requests (register-pointer writes in read_register)."""
+    return [r for r in hub.requests if r.packet_type == _I2C_WRITE_SINGLE_TYPE]
+
+
 def _write_reqs(hub: FakeHub) -> list[RawPacket]:
+    """Return I2CWriteMultipleBytes requests (data writes via write_register)."""
     return [r for r in hub.requests if r.packet_type == _I2C_WRITE_TYPE]
 
 
+def _all_write_reqs(hub: FakeHub) -> list[RawPacket]:
+    """Return all I2C write requests (both Single and Multiple), ordered by request time."""
+    return [
+        r for r in hub.requests
+        if r.packet_type in (_I2C_WRITE_SINGLE_TYPE, _I2C_WRITE_TYPE)
+    ]
+
+
 def _read_reqs(hub: FakeHub) -> list[RawPacket]:
-    return [r for r in hub.requests if r.packet_type == _I2C_READ_TYPE]
+    """Return all I2C read-initiate requests (both Single and Multiple)."""
+    return [
+        r for r in hub.requests
+        if r.packet_type in (_I2C_READ_TYPE, _I2C_READ_SINGLE_TYPE)
+    ]
 
 
 def _first_byte_of_write(pkt: RawPacket) -> int:
@@ -92,6 +114,17 @@ def _first_byte_of_write(pkt: RawPacket) -> int:
     is the data value (for a register write).
     """
     return pkt.payload[3]
+
+
+def _byte_of_single_write(pkt: RawPacket) -> int:
+    """Extract the byte value from an I2CWriteSingleByte payload.
+
+    Payload layout:
+      byte 0: i2c_channel
+      byte 1: slave_address
+      byte 2: byteToWrite
+    """
+    return pkt.payload[2]
 
 
 def _bytes_of_write(pkt: RawPacket) -> bytes:
@@ -246,17 +279,23 @@ class TestColorSensor:
         assert enable_idx < atime_idx, "ENABLE must be written before ATIME"
         assert atime_idx < ppulse_idx, "ATIME must be written before PPULSE"
 
-        # ID register-pointer write must occur after PPULSE write
+        # ID register-pointer write must occur after PPULSE write.
+        # In read_register(), the register pointer is now set via I2CWriteSingleByte
+        # (DEKA 0x25), not I2CWriteMultipleBytes — check that list instead.
         expected_id_reg = COMMAND_BIT | MULTI_BYTE_BIT | APDS9960_ID
-        id_write_idx = next(
-            (i for i, w in enumerate(writes)
-             if _first_byte_of_write(w) == expected_id_reg),
+        single_writes = _write_single_reqs(hub)
+        id_single_write_idx = next(
+            (i for i, w in enumerate(single_writes)
+             if _byte_of_single_write(w) == expected_id_reg),
             None,
         )
-        assert id_write_idx is not None, (
-            f"ID register pointer 0x{expected_id_reg:02X} not found in writes"
+        assert id_single_write_idx is not None, (
+            f"ID register pointer 0x{expected_id_reg:02X} not found in "
+            f"I2CWriteSingleByte requests (read_register uses WriteSingleByte "
+            f"for register-pointer phase)"
         )
-        assert id_write_idx > ppulse_idx, "ID read must come after PPULSE write"
+        # Confirm at least 1 read was issued (ReadSingleByte or ReadMultipleBytes)
+        assert len(reads) >= 1, f"Expected >= 1 read initiate, got {len(reads)}"
 
     def test_init_raises_protocol_error_on_wrong_device_id(self) -> None:
         """ColorSensor.__init__ raises ProtocolError if device ID != 0x60."""

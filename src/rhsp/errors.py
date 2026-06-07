@@ -12,6 +12,7 @@ __all__ = [
     "ChecksumError",
     "RhspTimeoutError",
     "NackError",
+    "I2CError",
 ]
 
 
@@ -43,3 +44,29 @@ class NackError(RhspError):
         self.code = code
         self.description = description
         super().__init__(f"NACK {code}: {description}")
+
+
+class I2CError(RhspError):
+    """Raised when an I2C operation fails at the bus level.
+
+    Attributes:
+        i2c_status: The ``i2cStatus`` code returned by the hub (e.g. 3 for
+            NACK/absent device, 46 for bus timeout).
+        channel: I2C channel index (0–3).
+        address: 7-bit I2C device address.
+    """
+
+    def __init__(
+        self,
+        i2c_status: int,
+        channel: int,
+        address: int,
+        message: str = "",
+    ) -> None:
+        self.i2c_status = i2c_status
+        self.channel = channel
+        self.address = address
+        desc = message or f"I2C status {i2c_status}"
+        super().__init__(
+            f"{desc} (channel={channel}, address=0x{address:02X}, i2cStatus={i2c_status})"
+        )
