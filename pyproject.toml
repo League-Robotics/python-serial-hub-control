@@ -1,6 +1,6 @@
 [project]
 name = "rhsp"
-version = "0.20260606.4"
+version = "0.20260606.5"
 description = "Pure-Python driver for the REV Robotics Expansion/Control Hub serial protocol (RHSP / DEKA interface)"
 readme = "README.md"
 authors = [
@@ -8,13 +8,14 @@ authors = [
 ]
 license = "BSD-3-Clause"
 license-files = ["LICENSE.txt"]
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 keywords = ["rev-robotics", "ftc", "expansion-hub", "control-hub", "serial", "robotics", "rhsp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Topic :: System :: Hardware :: Hardware Drivers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
 ]

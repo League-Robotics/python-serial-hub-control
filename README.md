@@ -12,7 +12,7 @@ motors, servos, digital I/O, analog inputs, the on-board IMU, and I2C sensors
 
 ## Requirements
 
-- Python ≥ 3.13
+- Python ≥ 3.12 (3.12 is the ROS 2 system Python; 3.13 also supported)
 - A REV Expansion/Control Hub connected over USB
 - [`uv`](https://docs.astral.sh/uv/) for dependency management
 
