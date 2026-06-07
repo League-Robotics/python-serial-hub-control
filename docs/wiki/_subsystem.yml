@@ -1,0 +1,4 @@
+name: serial-hub-control
+title: REV Hub Serial Protocol (RHSP)
+blurb: Pure-Python driver and full wire-protocol reference for the REV Robotics Expansion/Control Hub serial protocol.
+order: 100
